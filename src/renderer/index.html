@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      style-src 的 'unsafe-inline' 是 antd 6 CSS-in-JS 必需的；
+      img-src 的 blob:/data: 是画面预览（createImageBitmap + canvas）必需的。
+      这套在 dev(http://localhost:5173) 和 prod(file://) 下都验证过。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*"
+    />
+    <title>万龙控制面板</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

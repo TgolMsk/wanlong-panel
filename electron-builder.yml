@@ -1,0 +1,24 @@
+appId: com.wanlong.panel
+productName: 万龙控制面板
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**
+  - package.json
+extraResources:
+  # 模板库、ADBKeyboard.apk 等随包分发的静态资源
+  - from: resources
+    to: resources
+    filter: ['**/*']
+asar: true
+asarUnpack:
+  # sharp 是 N-API 原生模块，必须 unpack 才能 require
+  - node_modules/sharp/**
+  - node_modules/@img/**
+  # opencv.js 单文件 13MB 的 WASM 胶水，unpack 避免 asar 内加载问题
+  - node_modules/@techstark/opencv-js/**
+mac:
+  target: [dir]
+  category: public.app-category.utilities
+  identity: null
