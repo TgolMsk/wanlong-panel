@@ -1,0 +1,526 @@
+/* =============================================================================
+ * 「群控倒计时 + 采集配置」模块的私有样式。
+ *
+ * 规矩：
+ *   · 颜色**一律**用 tokens.css 的 var(--wl-*)，本文件里不允许出现任何十六进制色值。
+ *   · 只写本模块自己的类（前缀统一 `wlg-`），不覆盖 antd 的类，也不改全局。
+ *   · 需要毛玻璃卡 / 凹槽 / 标题 / 小字，直接用 tokens.css 已冻结的工具类
+ *     （.wl-glass / .wl-sunken / .wl-title / .wl-heading / .wl-label / .wl-micro / .wl-mono）。
+ * ========================================================================== */
+
+/* ── 页面骨架 ─────────────────────────────────────────────────────────── */
+
+.wlg-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-5);
+  padding-bottom: var(--wl-space-6);
+}
+
+.wlg-page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--wl-space-4);
+  flex-wrap: wrap;
+}
+
+.wlg-page-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-1);
+  min-width: 0;
+}
+
+/* ── 顶部全局汇总条的脚注 ─────────────────────────────────────────────
+   汇总数字本身用面板统一的 MetricStrip + StatTile（见 components/），
+   这里只补一条分隔线下的说明行。 */
+
+.wlg-summary-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--wl-space-4);
+  flex-wrap: wrap;
+  border-top: 1px solid var(--wl-split);
+}
+
+/* ── 实例卡片 ─────────────────────────────────────────────────────────── */
+
+.wlg-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(430px, 1fr));
+  gap: var(--wl-space-4);
+}
+
+.wlg-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.wlg-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--wl-space-3);
+  padding: var(--wl-card-pad-sm) var(--wl-card-pad);
+  border-bottom: 1px solid var(--wl-split);
+}
+
+.wlg-card-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.wlg-card-name {
+  font-size: var(--wl-fs-subtitle);
+  font-weight: var(--wl-fw-medium);
+  letter-spacing: var(--wl-ls-tight);
+  color: var(--wl-text-heading);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wlg-card-sub {
+  display: flex;
+  align-items: center;
+  gap: var(--wl-space-2);
+  flex-wrap: wrap;
+}
+
+.wlg-card-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.wlg-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--wl-space-3);
+  padding: var(--wl-space-2) var(--wl-card-pad);
+  border-top: 1px solid var(--wl-split);
+}
+
+/* 在线状态点 */
+.wlg-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--wl-radius-pill);
+  flex: 0 0 auto;
+  background: var(--wl-neutral);
+}
+.wlg-dot-online {
+  background: var(--wl-success);
+  box-shadow: 0 0 0 3px var(--wl-success-soft);
+}
+.wlg-dot-busy {
+  background: var(--wl-info);
+  box-shadow: 0 0 0 3px var(--wl-info-soft);
+}
+.wlg-dot-error {
+  background: var(--wl-danger);
+  box-shadow: 0 0 0 3px var(--wl-danger-soft);
+}
+
+/* 队列 N/M 徽章 */
+.wlg-queue {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  padding: 2px var(--wl-space-3);
+  border-radius: var(--wl-radius-pill);
+  border: 1px solid var(--wl-border);
+  background: var(--wl-bg-surface);
+  white-space: nowrap;
+}
+.wlg-queue-used {
+  font-size: var(--wl-fs-metric-sm);
+  font-weight: var(--wl-fw-semibold);
+  line-height: 1.1;
+  color: var(--wl-text);
+  font-variant-numeric: tabular-nums;
+}
+.wlg-queue-full .wlg-queue-used {
+  color: var(--wl-warning);
+}
+.wlg-queue-free .wlg-queue-used {
+  color: var(--wl-accent);
+}
+.wlg-queue-total {
+  font-size: var(--wl-fs-label);
+  color: var(--wl-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 队伍行 ───────────────────────────────────────────────────────────── */
+
+.wlg-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--wl-space-3);
+  row-gap: var(--wl-space-2);
+  padding: var(--wl-space-3) var(--wl-card-pad);
+  border-bottom: 1px solid var(--wl-split);
+}
+.wlg-row:last-child {
+  border-bottom: none;
+}
+
+.wlg-row-error {
+  background: var(--wl-danger-soft);
+}
+
+.wlg-row-imminent {
+  background: var(--wl-warning-soft);
+}
+
+.wlg-row-stale {
+  opacity: 0.62;
+}
+
+/* 资源徽章：一个字 + 该资源的序列色 */
+.wlg-res {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--wl-radius-xs);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--wl-fs-label);
+  font-weight: var(--wl-fw-semibold);
+  color: var(--wl-text-on-accent);
+  flex: 0 0 auto;
+}
+.wlg-res-unknown {
+  background: var(--wl-neutral-soft);
+  color: var(--wl-text-tertiary);
+  border: 1px dashed var(--wl-border);
+}
+/* 资源原画版徽章：透明底 PNG 压在一层很淡的浮层色上，别再叠序列色 */
+.wlg-res-img {
+  background: var(--wl-neutral-soft);
+  padding: 2px;
+  overflow: hidden;
+}
+.wlg-res-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+}
+
+.wlg-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.wlg-row-line {
+  display: flex;
+  align-items: center;
+  gap: var(--wl-space-2);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.wlg-row-phase {
+  font-size: var(--wl-fs-label);
+  color: var(--wl-text-secondary);
+  white-space: nowrap;
+}
+
+.wlg-row-coord {
+  color: var(--wl-text-tertiary);
+  white-space: nowrap;
+}
+
+.wlg-row-badge {
+  font-size: var(--wl-fs-micro);
+  line-height: 1.5;
+  padding: 0 var(--wl-space-2);
+  border-radius: var(--wl-radius-pill);
+  border: 1px solid var(--wl-border);
+  color: var(--wl-text-tertiary);
+  white-space: nowrap;
+}
+.wlg-row-badge-warn {
+  color: var(--wl-warning);
+  border-color: var(--wl-warning);
+  background: var(--wl-warning-soft);
+}
+
+.wlg-row-timer {
+  justify-self: end;
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+.wlg-timer-text {
+  font-family: var(--wl-font-mono);
+  font-size: var(--wl-fs-metric-sm);
+  font-weight: var(--wl-fw-semibold);
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  color: var(--wl-text);
+}
+.wlg-timer-accent {
+  color: var(--wl-accent);
+}
+.wlg-timer-warning {
+  color: var(--wl-warning);
+}
+.wlg-timer-danger {
+  color: var(--wl-danger);
+}
+.wlg-timer-neutral {
+  color: var(--wl-text-secondary);
+}
+/* 识别失败/无数据时不是大号数字，用普通字号免得误导 */
+.wlg-timer-text-plain {
+  font-size: var(--wl-fs-body);
+  font-weight: var(--wl-fw-regular);
+  font-family: var(--wl-font-sans);
+}
+
+.wlg-row-reason {
+  grid-column: 1 / -1;
+  font-size: var(--wl-fs-micro);
+  line-height: var(--wl-lh-body);
+  color: var(--wl-danger);
+}
+.wlg-row-reason-warn {
+  color: var(--wl-warning);
+}
+
+/* ── 进度条 ───────────────────────────────────────────────────────────── */
+
+.wlg-bar {
+  position: relative;
+  height: 6px;
+  border-radius: var(--wl-radius-pill);
+  background: var(--wl-bg-sunken);
+  border: 1px solid var(--wl-border-subtle);
+  overflow: hidden;
+}
+
+.wlg-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: var(--wl-radius-pill);
+  background: var(--wl-accent);
+  /* 每秒只走一小格，用线性过渡把跳变抹平，看起来是连续在走。 */
+  transition: width 1s linear;
+}
+.wlg-bar-fill-warning {
+  background: var(--wl-warning);
+}
+.wlg-bar-fill-neutral {
+  background: var(--wl-neutral);
+}
+.wlg-bar-fill-danger {
+  background: var(--wl-danger);
+}
+
+/* 起点未知 ⇒ 画不出真实比例。用斜纹表示「进行中但进度不可知」，绝不编造一个假比例。 */
+.wlg-bar-indeterminate {
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--wl-accent-soft) 0,
+    var(--wl-accent-soft) 6px,
+    transparent 6px,
+    transparent 12px
+  );
+}
+
+/* ── 空态 / 提示 ──────────────────────────────────────────────────────── */
+
+.wlg-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--wl-space-2);
+  padding: var(--wl-space-7) var(--wl-card-pad);
+  text-align: center;
+}
+
+.wlg-empty-title {
+  font-size: var(--wl-fs-subtitle);
+  color: var(--wl-text-secondary);
+}
+
+.wlg-empty-desc {
+  font-size: var(--wl-fs-label);
+  color: var(--wl-text-tertiary);
+  max-width: 460px;
+  line-height: var(--wl-lh-body);
+}
+
+/* ── 配置页 ───────────────────────────────────────────────────────────── */
+
+.wlg-cfg {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-4);
+}
+
+.wlg-section-desc {
+  font-size: var(--wl-fs-label);
+  color: var(--wl-text-tertiary);
+  line-height: var(--wl-lh-body);
+  max-width: 900px;
+}
+
+/* 一个字段：标题 + 控件 + 中文说明 */
+.wlg-field {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--wl-space-3) var(--wl-space-5);
+  padding: var(--wl-space-3) 0;
+  border-bottom: 1px solid var(--wl-split);
+}
+.wlg-field:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.wlg-field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 6px;
+}
+
+.wlg-field-name {
+  font-size: var(--wl-fs-body);
+  color: var(--wl-text);
+  font-weight: var(--wl-fw-medium);
+}
+
+.wlg-field-key {
+  font-family: var(--wl-font-mono);
+  font-size: var(--wl-fs-micro);
+  color: var(--wl-text-disabled);
+}
+
+.wlg-field-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-2);
+  min-width: 0;
+}
+
+.wlg-field-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--wl-space-3);
+  flex-wrap: wrap;
+}
+
+.wlg-field-hint {
+  font-size: var(--wl-fs-label);
+  color: var(--wl-text-tertiary);
+  line-height: var(--wl-lh-body);
+}
+
+.wlg-field-cost {
+  font-size: var(--wl-fs-micro);
+  color: var(--wl-text-secondary);
+  line-height: var(--wl-lh-body);
+  padding: var(--wl-space-2) var(--wl-space-3);
+  border-left: 2px solid var(--wl-accent-border);
+  background: var(--wl-accent-soft);
+  border-radius: 0 var(--wl-radius-xs) var(--wl-radius-xs) 0;
+}
+
+.wlg-field-err {
+  font-size: var(--wl-fs-label);
+  color: var(--wl-danger);
+  line-height: var(--wl-lh-body);
+}
+.wlg-field-warn {
+  font-size: var(--wl-fs-label);
+  color: var(--wl-warning);
+  line-height: var(--wl-lh-body);
+}
+
+/* 资源卡：四种资源横排 */
+.wlg-res-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--wl-space-3);
+}
+
+.wlg-res-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-3);
+  padding: var(--wl-space-4);
+  border-radius: var(--wl-radius-md);
+  border: 1px solid var(--wl-border-subtle);
+  background: var(--wl-bg-surface);
+}
+.wlg-res-card-on {
+  border-color: var(--wl-accent-border);
+}
+
+.wlg-res-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--wl-space-3);
+}
+
+.wlg-res-card-name {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.wlg-res-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--wl-space-2);
+}
+
+/* 底部操作条：吸底，改完不用滚回去 */
+.wlg-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: var(--wl-z-sticky);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--wl-space-3);
+  padding: var(--wl-space-3) var(--wl-card-pad);
+  flex-wrap: wrap;
+}
+
+.wlg-actions-msg {
+  font-size: var(--wl-fs-label);
+  color: var(--wl-text-tertiary);
+  min-width: 0;
+}
+
+.wlg-actions-btns {
+  display: flex;
+  align-items: center;
+  gap: var(--wl-space-2);
+  flex-wrap: wrap;
+}

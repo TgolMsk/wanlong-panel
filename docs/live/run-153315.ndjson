@@ -1,0 +1,71 @@
+{"at":1788993196045,"level":"info","message":"已连接实例 index=0「我的安卓」serial=127.0.0.1:16384，screencap 实测 2560x1440，前台=com.lilithgames.samo.android.cn"}
+{"at":1788993196179,"level":"warn","message":"模板：以下可选模板缺失，相关判据会降级（不影响主流程）：tpl_alliance_own"}
+{"at":1788993196179,"level":"info","message":"模板集 tset_mtugr5sx0iwc：界面模板 40 张，字形集 7 套，缺 1 张：tpl_alliance_own"}
+{"at":1788993196180,"level":"info","message":"配置：等级策略={\"mode\":\"relative\",\"offset\":-1,\"minLevel\":5,\"assumedMaxLevel\":8,\"maxLevelHardCap\":15}"}
+{"at":1788993196180,"level":"info","message":"上一轮运行期状态：maxLevel=未探测，在途 0 支"}
+{"at":1788993196932,"level":"debug","message":"已处于世界地图（放大镜命中 0.9811）。"}
+{"at":1788993198208,"level":"debug","message":"读到「行军队列 N/M」= 1/5","data":{"field":"行军队列 N/M","text":"1/5","minScore":0.8998}}
+{"at":1788993198218,"level":"debug","message":"读到「第 1 行倒计时」= 03:50:33","data":{"field":"第 1 行倒计时","text":"03:50:33","minScore":0.8379}}
+{"at":1788993198221,"level":"debug","message":"读到「第 1 行目标坐标」= 697,566","data":{"field":"第 1 行目标坐标","text":"697,566","minScore":0.7869}}
+{"at":1788993198223,"level":"info","message":"部队管理：队列 1/5，解析出 1 行。","data":{"queueUsed":1,"queueTotal":5,"rows":[{"index":1,"status":"gathering","remainingSec":13833,"coord":"697,566"}]}}
+{"at":1788993198223,"level":"debug","message":"读到「第 1 行指挥官耐力」= 105/105","data":{"field":"第 1 行指挥官耐力","text":"105/105","minScore":0.9467}}
+{"at":1788993198930,"level":"debug","message":"当前是部队管理面板，按 BACK 关闭。"}
+{"at":1788993200792,"level":"debug","message":"已处于世界地图（放大镜命中 0.9811）。"}
+{"at":1788993202349,"level":"debug","message":"分类已经是「伐木场」（锚点 x=1269）。"}
+{"at":1788993203821,"level":"debug","message":"读到「搜索面板等级」= 8","data":{"field":"搜索面板等级","text":"8","minScore":0.9775}}
+{"at":1788993205291,"level":"debug","message":"读到「搜索面板等级」= 8","data":{"field":"搜索面板等级","text":"8","minScore":0.9775}}
+{"at":1788993205291,"level":"info","message":"探测到资源等级上限 = 8。"}
+{"at":1788993205292,"level":"info","message":"开始为「伐木场」找点：等级上限 8，搜索下限 7。"}
+{"at":1788993205297,"level":"info","message":"把搜索下限从 8 调到 7（点[−] 1 次）。"}
+{"at":1788993205297,"level":"debug","message":"读到「搜索面板等级」= 8","data":{"field":"搜索面板等级","text":"8","minScore":0.9775}}
+{"at":1788993206370,"level":"debug","message":"读到「搜索面板等级」= 7","data":{"field":"搜索面板等级","text":"7","minScore":0.9803}}
+{"at":1788993206370,"level":"debug","message":"搜索下限已是 7 级。"}
+{"at":1788993208731,"level":"debug","message":"读到「卡片资源点等级」= 7","data":{"field":"卡片资源点等级","text":"7","minScore":1}}
+{"at":1788993208737,"level":"debug","message":"读到「卡片储量」= 1,134,000","data":{"field":"卡片储量","text":"1,134,000","minScore":0.844}}
+{"at":1788993208744,"level":"info","message":"换点：所属联盟为「他方」，不符合策略「own-and-neutral」。"}
+{"at":1788993208744,"level":"info","message":"资源点卡片：伐木场 等级7，储量 1,134,000，采集者无，联盟 他方，坐标 ?"}
+{"at":1788993208738,"level":"warn","message":"「卡片坐标」识别失败：连续 1 次都读不出可信的值（最后一次读到「619,5?1」）","data":{"field":"卡片坐标","glyphSet":"dig_card_coord","roi":{"x":1864,"y":1112,"w":176,"h":44},"lastText":"619,5?1"}}
+{"at":1788993209470,"level":"debug","message":"世界地图上还压着一张资源点卡片，先关掉。"}
+{"at":1788993210553,"level":"debug","message":"已处于世界地图（放大镜命中 0.982）。"}
+{"at":1788993212112,"level":"debug","message":"分类已经是「伐木场」（锚点 x=1269）。"}
+{"at":1788993212115,"level":"debug","message":"读到「搜索面板等级」= 7","data":{"field":"搜索面板等级","text":"7","minScore":0.9803}}
+{"at":1788993212115,"level":"debug","message":"搜索下限已是 7 级。"}
+{"at":1788993214433,"level":"debug","message":"读到「卡片资源点等级」= 8","data":{"field":"卡片资源点等级","text":"8","minScore":1}}
+{"at":1788993214438,"level":"debug","message":"读到「卡片储量」= 1,242,860","data":{"field":"卡片储量","text":"1,242,860","minScore":0.9274}}
+{"at":1788993214440,"level":"debug","message":"读到「卡片坐标」= 615,535","data":{"field":"卡片坐标","text":"615,535","minScore":0.9799}}
+{"at":1788993214441,"level":"info","message":"换点：所属联盟为「他方」，不符合策略「own-and-neutral」。"}
+{"at":1788993214441,"level":"info","message":"资源点卡片：伐木场 等级8，储量 1,242,860，采集者无，联盟 他方，坐标 615,535"}
+{"at":1788993215150,"level":"debug","message":"世界地图上还压着一张资源点卡片，先关掉。"}
+{"at":1788993216226,"level":"debug","message":"已处于世界地图（放大镜命中 0.9321）。"}
+{"at":1788993217796,"level":"debug","message":"分类已经是「伐木场」（锚点 x=1269）。"}
+{"at":1788993217798,"level":"debug","message":"读到「搜索面板等级」= 7","data":{"field":"搜索面板等级","text":"7","minScore":0.9803}}
+{"at":1788993217798,"level":"debug","message":"搜索下限已是 7 级。"}
+{"at":1788993219056,"level":"debug","message":"读到「卡片资源点等级」= 7","data":{"field":"卡片资源点等级","text":"7","minScore":1}}
+{"at":1788993219061,"level":"debug","message":"读到「卡片储量」= 1,134,000","data":{"field":"卡片储量","text":"1,134,000","minScore":0.844}}
+{"at":1788993219062,"level":"info","message":"资源点卡片：伐木场 等级7，储量 1,134,000，采集者无，联盟 他方，坐标 617,535"}
+{"at":1788993219062,"level":"debug","message":"读到「卡片坐标」= 617,535","data":{"field":"卡片坐标","text":"617,535","minScore":0.9799}}
+{"at":1788993219062,"level":"info","message":"换点：所属联盟为「他方」，不符合策略「own-and-neutral」。"}
+{"at":1788993219787,"level":"debug","message":"世界地图上还压着一张资源点卡片，先关掉。"}
+{"at":1788993220852,"level":"debug","message":"已处于世界地图（放大镜命中 0.9811）。"}
+{"at":1788993222394,"level":"debug","message":"分类已经是「伐木场」（锚点 x=1269）。"}
+{"at":1788993222396,"level":"debug","message":"读到「搜索面板等级」= 7","data":{"field":"搜索面板等级","text":"7","minScore":0.9803}}
+{"at":1788993222396,"level":"debug","message":"搜索下限已是 7 级。"}
+{"at":1788993224690,"level":"debug","message":"读到「卡片资源点等级」= 7","data":{"field":"卡片资源点等级","text":"7","minScore":1}}
+{"at":1788993224698,"level":"info","message":"资源点卡片：伐木场 等级7，储量 1,134,000，采集者无，联盟 中立，坐标 ?"}
+{"at":1788993224698,"level":"debug","message":"「自动采集至清空」已是已勾选，无需操作。"}
+{"at":1788993224697,"level":"warn","message":"「卡片坐标」识别失败：连续 1 次都读不出可信的值（最后一次读到「626,5?8」）","data":{"field":"卡片坐标","glyphSet":"dig_card_coord","roi":{"x":1864,"y":1112,"w":176,"h":44},"lastText":"626,5?8"}}
+{"at":1788993224695,"level":"debug","message":"读到「卡片储量」= 1,134,000","data":{"field":"卡片储量","text":"1,134,000","minScore":0.844}}
+{"at":1788993228599,"level":"debug","message":"读到「单程行军耗时」= 00:00:25","data":{"field":"单程行军耗时","text":"00:00:25","minScore":0.7877}}
+{"at":1788993228612,"level":"debug","message":"读到「编成兵力」= 28,350/267,300","data":{"field":"编成兵力","text":"28,350/267,300","minScore":0.911}}
+{"at":1788993228618,"level":"debug","message":"读到「负载量」= 1,190,700","data":{"field":"负载量","text":"1,190,700","minScore":0.8932}}
+{"at":1788993228619,"level":"info","message":"派兵：点行军（单程 25 秒）。"}
+{"at":1788993238419,"level":"warn","message":"派兵后没能确认回到世界地图，下一步会强制把界面拉回来。"}
+{"at":1788993239147,"level":"debug","message":"当前是创建部队页，点左上角返回。"}
+{"at":1788993240414,"level":"debug","message":"已处于世界地图（放大镜命中 0.9327）。"}
+{"at":1788993241660,"level":"debug","message":"读到「行军队列 N/M」= 1/5","data":{"field":"行军队列 N/M","text":"1/5","minScore":0.8998}}
+{"at":1788993241676,"level":"debug","message":"读到「第 1 行倒计时」= 03:49:50","data":{"field":"第 1 行倒计时","text":"03:49:50","minScore":0.8333}}
+{"at":1788993241679,"level":"debug","message":"读到「第 1 行指挥官耐力」= 105/105","data":{"field":"第 1 行指挥官耐力","text":"105/105","minScore":0.9467}}
+{"at":1788993241679,"level":"warn","message":"派兵后队列占用没有增加（派兵前 1，现在 1），这一次派兵可能实际没成功（队列被别的功能块抢了，或弹了错误提示）。本次不计入成功。","data":{"before":1,"after":1}}
+{"at":1788993241679,"level":"info","message":"部队管理：队列 1/5，解析出 1 行。","data":{"queueUsed":1,"queueTotal":5,"rows":[{"index":1,"status":"gathering","remainingSec":13790,"coord":"697,566"}]}}
+{"at":1788993241678,"level":"debug","message":"读到「第 1 行目标坐标」= 697,566","data":{"field":"第 1 行目标坐标","text":"697,566","minScore":0.787}}
+{"at":1788993242888,"level":"info","message":"派兵后队列数没变，本轮到此为止，等下一轮重新决策。 下次唤醒：19:26:48（最早释放的队列预计 19:25:31 空出，加 60 秒冗余 与 17 秒错峰抖动后唤醒。）"}

@@ -1,0 +1,151 @@
+{
+  "ranAt": "2026-09-09T18:24:25.113Z",
+  "instance": {
+    "index": 0,
+    "name": "我的安卓",
+    "adbPort": 16384,
+    "serial": "127.0.0.1:16384"
+  },
+  "device": {
+    "serial": "127.0.0.1:16384",
+    "instanceIndex": 0,
+    "model": "VER-AN00",
+    "androidVersion": "12",
+    "sdkInt": 32,
+    "abi": "arm64-v8a",
+    "screenWidth": 2560,
+    "screenHeight": 1440,
+    "density": 360,
+    "booted": true,
+    "foregroundPackage": "app.lawnchair"
+  },
+  "capture": {
+    "width": 2560,
+    "height": 1440,
+    "bytes": 14745600,
+    "medianMs": 1250,
+    "noThrottleMs": 727
+  },
+  "template": {
+    "id": "smoke_probe",
+    "name": "冒烟探针",
+    "file": "smoke_probe.png",
+    "authoredWidth": 2560,
+    "authoredHeight": 1440,
+    "bounds": {
+      "x": 2168,
+      "y": 672,
+      "w": 240,
+      "h": 240
+    },
+    "defaultRoi": {
+      "x": 2024,
+      "y": 528,
+      "w": 528,
+      "h": 528
+    },
+    "std": 79.6,
+    "note": "由 scripts/smoke.ts 从真实截图自动裁出，每次冒烟都会覆盖。",
+    "createdAt": 1788977833774,
+    "updatedAt": 1788978259670
+  },
+  "match": {
+    "positive": {
+      "templateId": "smoke_probe",
+      "found": true,
+      "score": 0.999,
+      "x": 2168,
+      "y": 672,
+      "w": 240,
+      "h": 240,
+      "centerX": 2288,
+      "centerY": 792,
+      "threshold": 0.85,
+      "elapsedMs": 18
+    },
+    "negative": {
+      "templateId": "smoke_probe",
+      "found": false,
+      "score": -0.4802,
+      "x": -1,
+      "y": -1,
+      "w": 240,
+      "h": 240,
+      "centerX": -1,
+      "centerY": -1,
+      "threshold": 0.85,
+      "elapsedMs": 9,
+      "reason": "最高分 -0.4802 低于阈值 0.85（搜索区 100,740 600x600，若目标不在此区内请检查 ROI）"
+    }
+  },
+  "input": {
+    "diffAfterAppSwitch": 123.9652072482639,
+    "diffAfterHome": 0,
+    "fgBefore": "app.lawnchair",
+    "fgSwitch": "app.lawnchair",
+    "fgAfter": "app.lawnchair",
+    "emptyPoint": {
+      "x": 228,
+      "y": 1172
+    }
+  },
+  "run": {
+    "runId": "run_mtufguef0h3x",
+    "scriptId": "smoke_min",
+    "scriptName": "冒烟最小任务",
+    "instanceIndex": 0,
+    "serial": "127.0.0.1:16384",
+    "accountId": null,
+    "accountName": null,
+    "status": "succeeded",
+    "startedAt": 1788978263271,
+    "endedAt": 1788978265113,
+    "stepDone": 6,
+    "stepTotal": 6,
+    "currentStepId": null,
+    "currentStepName": null,
+    "iteration": 0,
+    "error": null,
+    "stats": {
+      "captures": 1,
+      "matches": 2,
+      "matchHits": 2,
+      "taps": 1,
+      "retries": 0,
+      "lastTickMs": 1,
+      "avgCaptureMs": 1329
+    }
+  },
+  "checks": [
+    {
+      "no": "1",
+      "title": "实例列举",
+      "ok": true,
+      "detail": "1 个实例，1 个 running；index=0「我的安卓」adb_port=16384；耗时 56ms"
+    },
+    {
+      "no": "2",
+      "title": "真实截图",
+      "ok": true,
+      "detail": "serial=127.0.0.1:16384，分辨率 2560x1440，14.06MB，captureRaw 中位耗时 1250ms（去节流 727ms）；留痕 /Users/ws/Project/wanlongjs/.wl-data/shots/smoke_mtufgr9705ye/0001-capture.jpg"
+    },
+    {
+      "no": "3",
+      "title": "模板匹配",
+      "ok": true,
+      "detail": "正样本 score=0.999，命中 (2168,672)，与期望 (2168,672) 偏差 (0,0)px，匹配耗时 18ms；负样本 found=false score=-0.4802；模板 std=79.6（下限 12）"
+    },
+    {
+      "no": "4",
+      "title": "输入注入",
+      "ok": true,
+      "detail": "APP_SWITCH（33ms）后画面平均绝对差 123.97（>1 即证明按键真的打进去了）；HOME（16ms）复原后差降回 0.00，探针模板重新命中 score=0.999；前台包名 app.lawnchair → app.lawnchair → app.lawnchair。全程只发 keyevent，未安装/卸载应用，未改任何设置。"
+    },
+    {
+      "no": "5",
+      "title": "脚本引擎",
+      "ok": true,
+      "detail": "status=succeeded，6 步，耗时 1842ms，截图 1 次 / 匹配命中 2/2 / 点击 1 次；日志 8 条落盘到 run_mtufguef0h3x.ndjson，留痕 1 张"
+    }
+  ]
+}

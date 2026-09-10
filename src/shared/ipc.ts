@@ -34,6 +34,8 @@ import type {
   ValidationIssue
 } from './script'
 import type {
+  AlphaPreviewRequest,
+  AlphaPreviewResult,
   MatchResult,
   Point,
   Rect,
@@ -128,6 +130,7 @@ export const CH = {
   templateDelete: 'template:delete',
   templateImage: 'template:image',
   templateTest: 'template:test',
+  templateAlphaPreview: 'template:alphaPreview',
   // 脚本
   scriptList: 'script:list',
   scriptGet: 'script:get',
@@ -200,6 +203,8 @@ export type IpcRoutes = {
   /** 读模板 png 原图给编辑器显示。 */
   'template:image': [[setId: string, templateId: string], ArrayBuffer]
   'template:test': [[req: TemplateTestRequest], TemplateTestResult]
+  /** 面板「再抓一帧去底」：按裁剪区做多帧差分，回洋红底预览与不透明占比。 */
+  'template:alphaPreview': [[req: AlphaPreviewRequest], AlphaPreviewResult]
 
   // ── 脚本 ───────────────────────────────────────────────────────────────
   'script:list': [[], ScriptMeta[]]

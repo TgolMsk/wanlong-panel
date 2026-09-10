@@ -1,0 +1,248 @@
+/* =============================================================================
+ * 「每日数据统计」模块的私有样式。
+ *
+ * 规矩（与 features/gather/gather.css 一致）：
+ *   · 颜色**一律**用 tokens.css 的 var(--wl-*)，本文件里不允许出现任何十六进制色值。
+ *   · 只写本模块自己的类（前缀统一 `wls-`），不覆盖 antd 的类，也不改全局。
+ * ========================================================================== */
+
+/* ── 页面骨架 ─────────────────────────────────────────────────────────── */
+
+.wls-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-5);
+  padding-bottom: var(--wl-space-6);
+}
+
+.wls-page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--wl-space-4);
+  flex-wrap: wrap;
+}
+
+.wls-page-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-1);
+  min-width: 0;
+}
+
+/* 日期切换条：← 2026-09-09 → 今天 */
+.wls-datenav {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--wl-space-2);
+  padding: var(--wl-space-1) var(--wl-space-2);
+  border-radius: var(--wl-radius-pill);
+  border: 1px solid var(--wl-border);
+  background: var(--wl-bg-surface);
+}
+
+.wls-datenav-key {
+  font-family: var(--wl-font-mono);
+  font-size: var(--wl-fs-subtitle);
+  font-weight: var(--wl-fw-semibold);
+  letter-spacing: var(--wl-ls-tight);
+  color: var(--wl-text-heading);
+  font-variant-numeric: tabular-nums;
+  min-width: 108px;
+  text-align: center;
+}
+
+.wls-datenav-today {
+  color: var(--wl-accent);
+}
+
+/* 两栏：按资源 / 按实例 */
+.wls-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: var(--wl-space-4);
+}
+
+/* 汇总卡脚注 */
+.wls-summary-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--wl-space-4);
+  flex-wrap: wrap;
+  border-top: 1px solid var(--wl-split);
+  margin-top: var(--wl-space-4);
+  padding-top: var(--wl-space-3);
+}
+
+/* ── 按资源：一行一种资源 + 薄荷绿占比条 ─────────────────────────────── */
+
+.wls-res-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-3);
+}
+
+.wls-res-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--wl-space-3);
+  row-gap: var(--wl-space-1);
+}
+
+/* 资源徽章：一个字 + 该资源的序列色（与采集总览页同一套色） */
+.wls-res-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.wls-res-main {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.wls-res-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--wl-space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.wls-res-name {
+  color: var(--wl-text);
+  font-weight: var(--wl-fw-medium);
+}
+
+.wls-res-meta {
+  font-size: var(--wl-fs-label);
+  color: var(--wl-text-tertiary);
+  white-space: nowrap;
+}
+
+.wls-res-amount {
+  justify-self: end;
+  text-align: right;
+  font-family: var(--wl-font-mono);
+  font-size: var(--wl-fs-metric-sm);
+  font-weight: var(--wl-fw-semibold);
+  line-height: 1.1;
+  color: var(--wl-text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.wls-res-amount-accent {
+  color: var(--wl-accent);
+}
+.wls-res-amount-zero {
+  color: var(--wl-text-disabled);
+  font-weight: var(--wl-fw-regular);
+}
+
+/* 占比条 */
+.wls-bar {
+  position: relative;
+  height: 6px;
+  border-radius: var(--wl-radius-pill);
+  background: var(--wl-bg-sunken);
+  border: 1px solid var(--wl-border-subtle);
+  overflow: hidden;
+}
+
+.wls-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: var(--wl-radius-pill);
+  background: var(--wl-accent);
+  transition: width var(--wl-dur-slow) var(--wl-ease);
+}
+
+/* ── 表格里的小东西 ──────────────────────────────────────────────────── */
+
+.wls-mono {
+  font-family: var(--wl-font-mono);
+  font-size: var(--wl-fs-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.wls-num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  display: inline-block;
+  min-width: 2.5em;
+}
+
+.wls-dim {
+  color: var(--wl-text-disabled);
+}
+
+.wls-danger {
+  color: var(--wl-danger);
+}
+
+.wls-warning {
+  color: var(--wl-warning);
+}
+
+.wls-accent {
+  color: var(--wl-accent);
+}
+
+/* 快照对比：变化量 */
+.wls-delta-up {
+  color: var(--wl-success);
+}
+.wls-delta-down {
+  color: var(--wl-danger);
+}
+
+/* 近 N 天表：选中行 */
+.wls-row-selected td {
+  background: var(--wl-accent-soft) !important;
+}
+.wls-row-clickable {
+  cursor: pointer;
+}
+
+/* ── 快照操作区 ───────────────────────────────────────────────────────── */
+
+.wls-snap-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--wl-space-2);
+  flex-wrap: wrap;
+}
+
+.wls-snap-hint {
+  font-size: var(--wl-fs-label);
+  color: var(--wl-text-tertiary);
+  line-height: var(--wl-lh-body);
+}
+
+/* ── 空态 ────────────────────────────────────────────────────────────── */
+
+.wls-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--wl-space-2);
+  padding: var(--wl-space-6) var(--wl-card-pad);
+  text-align: center;
+}
+
+.wls-empty-title {
+  font-size: var(--wl-fs-subtitle);
+  color: var(--wl-text-secondary);
+}
+
+.wls-empty-desc {
+  font-size: var(--wl-fs-label);
+  color: var(--wl-text-tertiary);
+  max-width: 520px;
+  line-height: var(--wl-lh-body);
+}

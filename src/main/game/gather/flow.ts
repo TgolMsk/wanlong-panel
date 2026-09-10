@@ -1,0 +1,609 @@
+/**
+ * 「自动采集资源」主状态机（G0~G16 + 唤醒短流程）。
+ *
+ * 一轮（cycle）= 从「确认在世界地图」开始，到「派完能派的队并算出下次唤醒时刻」为止。
+ * 调用方（ETA 调度器）只需要：
+ *     const r = await runGatherCycle({ io, templates, config, state })
+ *     saveState(r.state); scheduleWakeAt(r.nextWakeAt)
+ *
+ * 状态编号与 resources/game-data/gather-flow.json 一一对应：
+ *   G0  确保在世界地图                G1  读部队管理面板（队列 N/M、各队 ETA、耐力）
+ *   G2  判定是否派兵（纯计算）        G3  打开搜索面板
+ *   G4  选资源分类（对账式）          G5  探测等级上限
+ *   G6  把滑杆调到搜索下限            G7  点搜索
+ *   G8  校验资源点卡片                G9  对账「自动采集至清空」
+ *   G10 点采集                        G11 进创建部队页
+ *   G12 一键采集编成                  G13 读 travelTime / 兵力 / 负载量
+ *   G14 行军                          G15 确认队列 +1
+ *   G16 记账并算下次唤醒
+ *
+ * ★★ 反复强调、也是最容易写错的一条：卡片等级判据是 `>= searchFloor`，不是 `==`。
+ *    具体理由与真机证据写在 card.ts 的文件头与 validateCard 里。
+ */
+
+import { AppError, serializeError, type SerializedError } from '@shared/errors'
+import type { RawFrame } from '@shared/vision'
+import {
+  effectiveLevelPolicy,
+  normalizeGatherConfig,
+  RESOURCE_LABEL,
+  type GatherConfig,
+  type ResourceEntry
+} from './config'
+import { readCard, reconcileAutoGather, validateCard, waitForCard } from './card'
+import { dispatchTroop } from './dispatch'
+import { backoffSeconds, planWake, toMarchRecords } from './eta'
+import {
+  WORLD_MAP_TEMPLATES,
+  closeResourceCard,
+  closeTroopPanel,
+  ensureWorldMap
+} from './navigation'
+import {
+  findSearchAnchor,
+  initialSearchFloor,
+  openSearchPanel,
+  probeMaxLevel,
+  relaxSearchFloor,
+  selectCategory,
+  setSearchFloor,
+  tapSearch,
+  type SearchAnchor
+} from './searchPanel'
+import { GatherHalt, GatherSession, type GatherIo, type GatherLogger } from './session'
+import { type GatherTemplates } from './templates'
+import { emptyTroopPanel, maxStamina, openTroopPanel, readTroopPanel } from './troopPanel'
+import {
+  createRuntimeState,
+  type DispatchRecord,
+  type GatherCycleResult,
+  type GatherOutcome,
+  type GatherRuntimeState,
+  type TroopPanelReading
+} from './types'
+
+/**
+ * 一次顺利的派兵实测要 17 帧（离线回放真机截图量得；设计文档估的 9~12 偏乐观）。
+ * 剩余配额少于这个数就不再开新的派兵，留 18 的余量。
+ */
+const CAPTURES_PER_DISPATCH = 18
+
+export interface RunGatherCycleOptions {
+  io: GatherIo
+  templates: GatherTemplates
+  /** 可以是部分配置，内部会归一化。 */
+  config?: Parameters<typeof normalizeGatherConfig>[0]
+  /** 上一轮的运行期状态。首次调用可不传。 */
+  state?: GatherRuntimeState
+  log?: GatherLogger
+  onShot?: (label: string, raw: RawFrame) => void | Promise<void>
+  signal?: AbortSignal
+  now?: () => number
+  random?: () => number
+  shrink?: number
+}
+
+/** 跑一轮自动采集。**不抛异常**：一切结果都体现在返回值里（含 error 字段）。 */
+export async function runGatherCycle(opts: RunGatherCycleOptions): Promise<GatherCycleResult> {
+  const cfg = normalizeGatherConfig(opts.config)
+  const state = cloneState(opts.state)
+  const now = opts.now ?? ((): number => Date.now())
+  const random = opts.random ?? Math.random
+
+  const s = new GatherSession({
+    io: opts.io,
+    templates: opts.templates,
+    config: cfg,
+    log: opts.log,
+    onShot: opts.onShot,
+    signal: opts.signal,
+    now,
+    shrink: opts.shrink
+  })
+
+  const dispatched: DispatchRecord[] = []
+  let panel: TroopPanelReading | null = null
+  let outcome: GatherOutcome = 'noResourceWanted'
+  let message = ''
+  let error: SerializedError | undefined
+
+  try {
+    if (!cfg.enabled) {
+      return finish(s, state, dispatched, panel, 'noResourceWanted', '自动采集未启用。', null, '未启用，不安排唤醒。')
+    }
+
+    // 放弃后的冷却期。
+    if (state.giveUpUntil && now() < state.giveUpUntil) {
+      const left = Math.round((state.giveUpUntil - now()) / 1000)
+      return finish(
+        s, state, dispatched, panel, 'giveUp',
+        `上一轮搜不到可用资源点，仍在冷却中（还剩 ${left} 秒）。`,
+        state.giveUpUntil, '冷却结束后再试。'
+      )
+    }
+
+    // 熔断：每小时派兵次数。
+    state.dispatchTimestamps = state.dispatchTimestamps.filter((t) => now() - t < 3_600_000)
+    const limit = cfg.schedule.maxDispatchesPerHour
+    if (limit > 0 && state.dispatchTimestamps.length >= limit) {
+      const oldest = Math.min(...state.dispatchTimestamps)
+      const at = oldest + 3_600_000
+      return finish(
+        s, state, dispatched, panel, 'circuitBroken',
+        `最近一小时已派兵 ${state.dispatchTimestamps.length} 次，达到熔断上限 ${limit} 次，` +
+          '暂停派兵（这条保护是为了在识别出错疯狂重试时兜底）。',
+        at, '等本小时窗口滑过后再试。'
+      )
+    }
+
+    // ── G0 / G1 ────────────────────────────────────────────────────────
+    await ensureWorldMap(s)
+    panel = (await openTroopPanel(s)) ? await readTroopPanel(s) : emptyTroopPanel(s)
+    for (const w of panel.warnings) s.warn(w)
+    state.inFlight = toMarchRecords(panel, state, cfg)
+    state.lastPanelSampledAt = panel.sampledAt
+
+    // ── G2：耐力硬前置 ─────────────────────────────────────────────────
+    const stamina = maxStamina(panel)
+    if (stamina !== null && stamina < cfg.queuePlan.minCommanderStamina) {
+      const at = now() + 30 * 60_000
+      return finish(
+        s, state, dispatched, panel, 'staminaLow',
+        `所有能读到的指挥官耐力都低于下限（最高 ${stamina} < ${cfg.queuePlan.minCommanderStamina}），本轮不派兵。`,
+        at, '30 分钟后再看耐力是否恢复。'
+      )
+    }
+    if (stamina === null && panel.rows.length > 0) {
+      s.warn('没读到任何指挥官耐力，本轮跳过耐力校验（不因识别失败而停派）。')
+    }
+
+    // ── 主循环：能派几支派几支 ─────────────────────────────────────────
+    for (;;) {
+      s.ensureAlive()
+
+      const slots = freeSlots(panel, cfg, state)
+      if (slots <= 0) {
+        outcome = dispatched.length > 0 ? 'dispatched' : 'queueFull'
+        message =
+          dispatched.length > 0
+            ? `本轮派出 ${dispatched.length} 支队伍，队列已排满（${panel.queueUsed}/${panel.queueTotal}）。`
+            : `行军队列没有空位（${panel.queueUsed}/${panel.queueTotal}，预留 ${cfg.queuePlan.reserveQueues}）。`
+        break
+      }
+
+      const entry = pickResource(cfg, state, dispatched)
+      if (!entry) {
+        outcome = dispatched.length > 0 ? 'dispatched' : 'noResourceWanted'
+        message =
+          dispatched.length > 0
+            ? `本轮派出 ${dispatched.length} 支队伍，各资源的队列配额都已满足。`
+            : '每种资源的队列配额都已满足，本轮无需派兵。'
+        break
+      }
+
+      if (s.captures + CAPTURES_PER_DISPATCH > cfg.safety.maxCapturesPerCycle) {
+        s.log(
+          'info',
+          `本轮截图配额只剩 ${cfg.safety.maxCapturesPerCycle - s.captures} 张，不足以再派一支队，收尾。`
+        )
+        outcome = dispatched.length > 0 ? 'dispatched' : 'queueFull'
+        message =
+          dispatched.length > 0
+            ? `本轮派出 ${dispatched.length} 支队伍，截图配额用尽，剩下的下一轮再派。`
+            : '截图配额不足以完成一次派兵，本轮先收尾。'
+        break
+      }
+
+      const before = panel.queueUsed
+      const one = await dispatchOne(s, cfg, state, entry)
+
+      if (one.kind === 'giveUp') {
+        state.giveUpUntil = now() + cfg.schedule.giveUpCooldownMin * 60_000
+        outcome = dispatched.length > 0 ? 'dispatched' : 'giveUp'
+        message = one.reason
+        break
+      }
+      if (one.kind === 'abort') {
+        throw new AppError('STEP_FAILED', one.reason, { step: 'dispatch' })
+      }
+
+      // ── G15：回世界地图，重读面板确认队列 +1 ───────────────────────
+      await ensureWorldMap(s)
+      panel = (await openTroopPanel(s)) ? await readTroopPanel(s) : emptyTroopPanel(s)
+      for (const w of panel.warnings) s.warn(w)
+
+      if (panel.queueUsed <= before) {
+        s.warn(
+          `派兵后队列占用没有增加（派兵前 ${before}，现在 ${panel.queueUsed}），` +
+            '这一次派兵可能实际没成功（队列被别的功能块抢了，或弹了错误提示）。本次不计入成功。',
+          { before, after: panel.queueUsed }
+        )
+        await s.shot('g15-queue-not-increased')
+        state.inFlight = toMarchRecords(panel, state, cfg)
+        state.lastPanelSampledAt = panel.sampledAt
+        outcome = dispatched.length > 0 ? 'dispatched' : 'queueFull'
+        message = '派兵后队列数没变，本轮到此为止，等下一轮重新决策。'
+        break
+      }
+
+      // ── G16：记账 ───────────────────────────────────────────────────
+      const record = one.record
+      dispatched.push(record)
+      state.dispatchTimestamps.push(record.at)
+      state.backoffIndex = 0
+      if (record.coord) {
+        if (record.travelTimeSec !== null) state.travelTimeByCoord[record.coord] = record.travelTimeSec
+        state.resourceByCoord[record.coord] = record.resource
+      }
+      state.inFlight = toMarchRecords(panel, state, cfg)
+      state.lastPanelSampledAt = panel.sampledAt
+
+      s.log(
+        'info',
+        `派兵成功：${RESOURCE_LABEL[record.resource].category} 等级${record.level ?? '?'} ` +
+          `坐标 ${record.coord ?? '?'}，单程 ${record.travelTimeSec ?? '?'} 秒。`,
+        { ...record }
+      )
+      outcome = 'dispatched'
+      message = `本轮已派出 ${dispatched.length} 支队伍。`
+    }
+  } catch (e) {
+    if (e instanceof GatherHalt) {
+      outcome = e.outcome
+      message = e.message
+      s.log(e.outcome === 'cancelled' ? 'info' : 'error', e.message)
+    } else {
+      outcome = 'error'
+      const err = AppError.from(e, 'STEP_FAILED')
+      message = err.message
+      error = serializeError(err)
+      s.log('error', `自动采集本轮失败：${err.message}`, { code: err.code, detail: err.detail })
+      await s.shot('cycle-error')
+    }
+  }
+
+  // 收尾：尽量把游戏留在世界地图（失败不影响结果）。
+  try {
+    await closeTroopPanel(s)
+  } catch {
+    // 收尾动作失败无所谓，下一轮的 G0 会把界面拉回来。
+  }
+
+  // ── 算下次唤醒 ────────────────────────────────────────────────────────
+  let wakeAt: number | null
+  let wakeReason: string
+  if (outcome === 'cancelled') {
+    wakeAt = null
+    wakeReason = '已被中止，不安排唤醒。'
+  } else if (outcome === 'error') {
+    wakeAt = now() + backoffSeconds(cfg, state.backoffIndex) * 1000
+    state.backoffIndex = Math.min(state.backoffIndex + 1, cfg.schedule.retryBackoffSeconds.length - 1)
+    wakeReason = '本轮出错，按退避序列重试。'
+  } else if (outcome === 'giveUp' && state.giveUpUntil) {
+    wakeAt = state.giveUpUntil
+    wakeReason = `搜不到可用资源点，冷却 ${cfg.schedule.giveUpCooldownMin} 分钟后再试。`
+  } else if (outcome === 'circuitBroken') {
+    wakeAt = now() + 10 * 60_000
+    wakeReason = '熔断中，10 分钟后复查。'
+  } else {
+    if (outcome === 'queueFull') {
+      // 唤醒后队列仍未空 ⇒ 退避档位往后挪一格（wakeupLoop 的 W3）。
+      state.backoffIndex = Math.min(
+        state.backoffIndex + 1,
+        Math.max(0, cfg.schedule.retryBackoffSeconds.length - 1)
+      )
+    }
+    const plan = planWake(cfg, now(), state.inFlight, state.backoffIndex, random)
+    wakeAt = plan.at
+    wakeReason = plan.reason
+  }
+
+  if (!message) message = '本轮结束。'
+  s.log('info', `${message} 下次唤醒：${wakeAt ? new Date(wakeAt).toLocaleTimeString('zh-CN') : '不唤醒'}（${wakeReason}）`)
+
+  return {
+    outcome,
+    message,
+    dispatched,
+    queue: panel ? { used: panel.queueUsed, total: panel.queueTotal } : null,
+    nextWakeAt: wakeAt,
+    nextWakeReason: wakeReason,
+    captures: s.captures,
+    state,
+    warnings: s.warnings,
+    error
+  }
+}
+
+// ── 单次派兵：G3 ~ G14 ────────────────────────────────────────────────────
+
+type DispatchOnce =
+  | { kind: 'dispatched'; record: DispatchRecord }
+  | { kind: 'giveUp'; reason: string }
+  | { kind: 'abort'; reason: string }
+
+async function dispatchOne(
+  s: GatherSession,
+  cfg: GatherConfig,
+  state: GatherRuntimeState,
+  entry: ResourceEntry
+): Promise<DispatchOnce> {
+  const label = RESOURCE_LABEL[entry.type].category
+  const policy = effectiveLevelPolicy(cfg, entry)
+
+  // ── G3 / G4 ──────────────────────────────────────────────────────────
+  let anchor: SearchAnchor = await openSearchPanel(s)
+  anchor = await selectCategory(s, entry.type, anchor)
+
+  // ── G5：等级上限（带缓存，上限随游戏进程增长但变化极慢）────────────────
+  let maxLv = state.maxLevel
+  const stale =
+    state.maxLevelProbedAt === null ||
+    s.now() - state.maxLevelProbedAt > cfg.searchRetry.probeIntervalMin * 60_000
+  if (cfg.searchRetry.probeMaxLevel && stale) {
+    const probed = await probeMaxLevel(s, anchor, policy)
+    maxLv = probed.maxLevel
+    state.maxLevel = probed.maxLevel
+    state.maxLevelProbedAt = s.now()
+  }
+  if (maxLv === null) {
+    maxLv = policy.mode === 'relative' ? policy.assumedMaxLevel : policy.maxLevelHardCap
+  }
+
+  // ★ searchFloor 是**搜索下限**：游戏会返回等级 >= 它的点，可能是它本身，也可能更高。
+  let searchFloor = initialSearchFloor(policy, maxLv)
+  let occupiedFails = 0
+  s.log('info', `开始为「${label}」找点：等级上限 ${maxLv}，搜索下限 ${searchFloor}。`)
+
+  const busyCoords = new Set(
+    state.inFlight.map((r) => r.coord).filter((c): c is string => Boolean(c))
+  )
+
+  for (;;) {
+    s.ensureAlive()
+    if (s.captures + 4 > cfg.safety.maxCapturesPerCycle) {
+      return {
+        kind: 'giveUp',
+        reason: `为「${label}」找点时截图配额用尽（已用 ${s.captures} 张），本轮先收尾。`
+      }
+    }
+
+    // 面板可能被上一次搜索的卡片盖住/关掉了，先确保它还在。
+    const still = await findSearchAnchor(s)
+    if (still) {
+      anchor = still
+    } else {
+      anchor = await openSearchPanel(s)
+      anchor = await selectCategory(s, entry.type, anchor)
+    }
+
+    // ── G6 / G7 ────────────────────────────────────────────────────────
+    await setSearchFloor(s, anchor, searchFloor, policy.maxLevelHardCap)
+    await tapSearch(s, anchor)
+
+    // ── G8 ─────────────────────────────────────────────────────────────
+    const cardAnchor = await waitForCard(s)
+    if (!cardAnchor) {
+      s.log('warn', `搜索后没出现资源点卡片（下限 ${searchFloor}），换一次。`)
+      const relaxed = bumpFail()
+      if (relaxed) return relaxed
+      continue
+    }
+
+    const needAlliance = cfg.thresholds.allianceTerritory !== 'any'
+    const card = await readCard(s, cardAnchor, needAlliance)
+    const verdict = validateCard(cfg, entry, card, searchFloor, busyCoords)
+
+    if (!verdict.ok) {
+      if (verdict.kind === 'abort') {
+        await s.shot('g8-abort')
+        return { kind: 'abort', reason: verdict.reason }
+      }
+      if (verdict.kind === 'wrongCategory') {
+        // 分类选错不是「点不合适」，不计入 occupiedFails。
+        s.warn(verdict.reason)
+        await closeResourceCard(s)
+        anchor = await openSearchPanel(s)
+        anchor = await selectCategory(s, entry.type, anchor)
+        continue
+      }
+      s.log('info', `换点：${verdict.reason}`)
+      const relaxed = bumpFail()
+      if (relaxed) return relaxed
+      continue
+    }
+
+    // ── G9：对账「自动采集至清空」──────────────────────────────────────
+    const reconciled = await reconcileAutoGather(s, cardAnchor, cfg.autoGatherUntilEmpty)
+    if (!reconciled && cfg.safety.abortOnReconcileFail) {
+      await s.shot('g9-reconcile-failed')
+      return {
+        kind: 'abort',
+        reason:
+          '「自动采集至清空」对账失败（读不出或点完复验仍不符），' +
+          '按 safety.abortOnReconcileFail 中止本轮，避免反复点击把状态点乱。'
+      }
+    }
+
+    // ── G10 ~ G14 ──────────────────────────────────────────────────────
+    const result = await dispatchTroop(s, cardAnchor, cfg, entry, card.storage)
+    if (!result.ok) {
+      if (result.kind === 'abort') return { kind: 'abort', reason: result.reason }
+      s.log('info', `换点：${result.reason}`)
+      const relaxed = bumpFail()
+      if (relaxed) return relaxed
+      continue
+    }
+
+    // 确认已经回到世界地图（派完兵游戏会自己退回去）。
+    // ★ 用 anyTemplate：放大镜镜片半透明、分数随地形漂移，见 navigation.ts 的 WORLD_MAP_TEMPLATES。
+    const back = await s.waitFor(WORLD_MAP_TEMPLATES, { waitMs: 8000, pollMs: 800 })
+    if (!back) {
+      s.warn('派兵后没能确认回到世界地图，下一步会强制把界面拉回来。')
+    }
+
+    return {
+      kind: 'dispatched',
+      record: {
+        at: s.now(),
+        resource: entry.type,
+        coord: card.coord,
+        level: card.level,
+        searchFloor,
+        storage: card.storage,
+        travelTimeSec: result.travelTimeSec,
+        troops: result.troops
+      }
+    }
+  }
+
+  /**
+   * 一次「这个点不合适」的记账。
+   * 达到上限就**放宽下限**（= 让更多候选点能被匹配到，不是「退而求其次采低级点」）。
+   * @returns 需要结束本次派兵时返回结果，否则 null（继续重搜）
+   */
+  function bumpFail(): DispatchOnce | null {
+    occupiedFails++
+    if (occupiedFails < cfg.searchRetry.occupiedRetryLimit) return null
+
+    const next = relaxSearchFloor(policy, searchFloor, cfg.searchRetry.floorRelaxStep)
+    if (next === null) {
+      return {
+        kind: 'giveUp',
+        reason:
+          `「${label}」连续 ${occupiedFails} 次都没找到可用的点，` +
+          `且搜索下限已经放宽到 ${searchFloor}（不能再低于 minLevel=${policy.minLevel}${
+            policy.mode === 'absolute' && !policy.allowRelax ? '，且配置不允许放宽' : ''
+          }），本轮放弃，进入冷却。`
+      }
+    }
+    s.log(
+      'info',
+      `同一下限连续 ${occupiedFails} 次没找到可用点，把搜索下限从 ${searchFloor} 放宽到 ${next}` +
+        '（放宽下限只是让更多点进入候选，仍可能采到高等级的点）。'
+    )
+    searchFloor = next
+    occupiedFails = 0
+    return null
+  }
+}
+
+// ── 决策辅助 ──────────────────────────────────────────────────────────────
+
+/**
+ * 可用队列数 = 队列上限 − 已用 − 预留，并受「自动采集最多占几个队列」约束。
+ *
+ * ★ 「哪些队伍是本引擎派的」只能靠**目标坐标**与派兵记账对上号，而坐标是识别出来的、可能读不出。
+ *   读不出时一律**当成是自己的**（见 countOwnGathering），方向是「少派」而不是「多派」。
+ */
+function freeSlots(
+  panel: TroopPanelReading,
+  cfg: GatherConfig,
+  state: GatherRuntimeState
+): number {
+  const byQueue = panel.queueTotal - panel.queueUsed - cfg.queuePlan.reserveQueues
+  const ownGathering = countOwnGathering(state)
+  const byPlan = cfg.queuePlan.maxConcurrentGather - ownGathering
+  return Math.max(0, Math.min(byQueue, byPlan))
+}
+
+/**
+ * 本引擎派出去、还在外面的采集队数量。
+ *
+ * ★★ 真机实测教训（2026-09-09）：**坐标读不出的行必须算进来**。
+ *    ownDispatch 的判据是「该行的目标坐标出现在 travelTimeByCoord 里」，
+ *    而部队管理面板行内的坐标识别本来就容易失手（字形集曾缺 0/4，且为了不接受假坐标
+ *    已经把接受阈值抬到 0.90，读不出的概率更高）。
+ *    如果把「读不出坐标」当成「不是我派的」，自己刚派出去的那支队就不算数，
+ *    引擎会以为配额还空着，于是接着再派一支 —— 一轮下来把队列全占满。
+ *    所以这里按「未知 = 假定是自己的」处理：方向是少派，不是多派。
+ */
+function countOwnGathering(state: GatherRuntimeState): number {
+  return state.inFlight.filter((r) => r.ownDispatch || r.coord === null).length
+}
+
+/**
+ * G2：挑一个「还欠队列」的资源。按 priority 升序，第一个没派满 queues 的就是它。
+ * @returns 所有资源的配额都满足时返回 null
+ */
+function pickResource(
+  cfg: GatherConfig,
+  state: GatherRuntimeState,
+  dispatched: readonly DispatchRecord[]
+): ResourceEntry | null {
+  const candidates = cfg.resources
+    .filter((r) => r.enabled && r.queues > 0)
+    .sort((a, b) => a.priority - b.priority)
+
+  const used = new Map<string, number>()
+  const counted = new Set<string>()
+  for (const r of state.inFlight) {
+    if (!r.resource) continue
+    used.set(r.resource, (used.get(r.resource) ?? 0) + 1)
+    if (r.coord) counted.add(r.coord)
+  }
+
+  // ★★ 真机实测教训（2026-09-09）：**本轮自己刚派出去的队必须无条件计入配额**。
+  //    上面那份记账是「面板行 -> 目标坐标 -> resourceByCoord」推出来的，
+  //    整条链路系在「行内坐标能读对」上；一旦坐标读不出（字形集曾缺 0/4，
+  //    且为了不接受假坐标已把阈值抬到 0.90），刚派出去的队就查不到资源类型，
+  //    每种资源的 used 都还是 0，引擎会立刻再派一支 —— 实测一轮之内连派两支伐木场。
+  //    dispatched 是本轮的**事实**，不依赖任何识别，拿它兜底最可靠。
+  //    坐标已经在面板行里认出来的那些不能重复计数，用 counted 去重。
+  for (const d of dispatched) {
+    if (d.coord && counted.has(d.coord)) continue
+    used.set(d.resource, (used.get(d.resource) ?? 0) + 1)
+  }
+
+  for (const c of candidates) {
+    if ((used.get(c.type) ?? 0) < c.queues) return c
+  }
+  return null
+}
+
+// ── 收尾 ──────────────────────────────────────────────────────────────────
+
+/**
+ * 「还没走到主循环就该结束了」的早退出口（未启用 / 冷却中 / 熔断 / 耐力不足）。
+ * 这些情况的唤醒时刻是调用点算好的确定值，这里不再二次推算 —— 尤其是「未启用」必须保持 null，
+ * 否则会给一个已经关掉的功能排上定时器。
+ */
+function finish(
+  s: GatherSession,
+  state: GatherRuntimeState,
+  dispatched: DispatchRecord[],
+  panel: TroopPanelReading | null,
+  outcome: GatherOutcome,
+  message: string,
+  wakeAt: number | null,
+  wakeReason: string
+): GatherCycleResult {
+  s.log('info', message)
+  return {
+    outcome,
+    message,
+    dispatched,
+    queue: panel ? { used: panel.queueUsed, total: panel.queueTotal } : null,
+    nextWakeAt: wakeAt,
+    nextWakeReason: wakeReason,
+    captures: s.captures,
+    state,
+    warnings: s.warnings
+  }
+}
+
+function cloneState(src?: GatherRuntimeState): GatherRuntimeState {
+  const base = createRuntimeState()
+  if (!src) return base
+  return {
+    maxLevel: src.maxLevel ?? null,
+    maxLevelProbedAt: src.maxLevelProbedAt ?? null,
+    backoffIndex: src.backoffIndex ?? 0,
+    giveUpUntil: src.giveUpUntil ?? null,
+    dispatchTimestamps: [...(src.dispatchTimestamps ?? [])],
+    inFlight: [...(src.inFlight ?? [])],
+    lastPanelSampledAt: src.lastPanelSampledAt ?? null,
+    travelTimeByCoord: { ...(src.travelTimeByCoord ?? {}) },
+    resourceByCoord: { ...(src.resourceByCoord ?? {}) }
+  }
+}

@@ -1,0 +1,4 @@
+{"at":1788993617689,"level":"info","message":"已连接实例 index=0「我的安卓」serial=127.0.0.1:16384，screencap 实测 2560x1440，前台=com.lilithgames.samo.android.cn"}
+{"at":1788993617846,"level":"warn","message":"模板：以下可选模板缺失，相关判据会降级（不影响主流程）：tpl_alliance_own"}
+{"at":1788993617846,"level":"info","message":"模板集 tset_mtugr5sx0iwc：界面模板 40 张，字形集 7 套，缺 1 张：tpl_alliance_own"}
+{"at":1788993618411,"level":"info","message":"截图 2560x1440 耗时 508ms，留痕 /Users/ws/Project/wanlongjs/docs/live/001-probe-frame.jpg"}

@@ -75,6 +75,20 @@ export const DEFAULT_MATCH_THRESHOLD = 0.85
  */
 export const MIN_TEMPLATE_STD = 12
 
+/**
+ * 透明底模板的掩码下限：不透明像素占比低于它、或总数少于 MIN_MASK_PIXELS 就拒绝——
+ * 只剩几十个像素的模板和低方差模板一样没有判别力。
+ */
+export const MIN_MASK_COVERAGE = 0.1
+export const MIN_MASK_PIXELS = 64
+
+/**
+ * 多帧差分去底的默认容差：RGB 任一通道差值 ≤ 容差视为「没变」。
+ * 实测（兽族城内按钮，3 帧不同地形）：16→覆盖 56%，24→60%，32→66%，48→81%；
+ * 24 时正样本 0.97~0.98、负样本 ≤0.63，再放宽会把恰好没变的背景也留下来。
+ */
+export const DEFAULT_ALPHA_DIFF_TOLERANCE = 24
+
 /** 唯一可用的匹配算法。TM_CCORR_NORMED / TM_SQDIFF_NORMED 实测对负样本无判别力，禁用。 */
 export const MATCH_METHOD = 'TM_CCOEFF_NORMED' as const
 

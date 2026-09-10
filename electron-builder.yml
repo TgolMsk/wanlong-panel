@@ -1,24 +1,50 @@
-appId: com.wanlong.panel
-productName: 万龙控制面板
+appId: com.wanlongjs.panel
+productName: 万龙面板
+copyright: Copyright © 2026 wanlongjs
+
 directories:
-  buildResources: build
   output: dist
+  buildResources: build
+
+# out/ 是 electron-vite 的产物（main / preload / renderer 三段），package.json 的 main
+# 指向 out/main/index.js。runner.js 与 index.js 同在 out/main/ 下，
+# orchestrator 用 join(__dirname,'runner.js') fork —— 所以整个 out/ 必须原样打进去。
 files:
-  - out/**
+  - out/**/*
   - package.json
+  - '!**/*.map'
+  - '!**/*.ts'
+
+# paths.ts 里 resourcesDir() 在打包后取 join(process.resourcesPath, 'resources')，
+# 所以这里必须落到 Contents/Resources/resources/，而不是 Contents/Resources/ 本身。
+# ADBKeyboard.apk（device:setupIme 要装的中文输入法）与内置模板都从这里读。
 extraResources:
-  # 模板库、ADBKeyboard.apk 等随包分发的静态资源
   - from: resources
     to: resources
-    filter: ['**/*']
+    filter:
+      - '**/*'
+
+# ★ sharp 是 N-API 原生模块，libvips 的 .node / .dylib 不能待在 asar 里（dlopen 打不开）。
+# ★ @techstark/opencv-js 是 WASM，运行时要用 fs 读 .wasm 同样不能压进 asar。
+# 两者都由 externalizeDepsPlugin 保持 external，运行时从 node_modules 加载。
 asar: true
 asarUnpack:
-  # sharp 是 N-API 原生模块，必须 unpack 才能 require
   - node_modules/sharp/**
   - node_modules/@img/**
-  # opencv.js 单文件 13MB 的 WASM 胶水，unpack 避免 asar 内加载问题
   - node_modules/@techstark/opencv-js/**
+
 mac:
-  target: [dir]
-  category: public.app-category.utilities
-  identity: null
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  # 本项目要 spawn MuMu 自带的 adb / mumutool 这些外部二进制，
+  # 沙箱化会直接挡掉，故不启用 App Sandbox。
+  hardenedRuntime: false
+  gatekeeperAssess: false
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+npmRebuild: false

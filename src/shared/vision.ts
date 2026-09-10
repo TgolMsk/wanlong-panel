@@ -76,6 +76,8 @@ export interface TemplateDef {
   threshold?: number
   /** prepareTemplate 时算出的灰度标准差，< MIN_TEMPLATE_STD 会被拒绝。存下来便于面板提示。 */
   std?: number
+  /** 透明底模板的不透明像素占比（0~1）。没有这个字段 = 普通整块模板。 */
+  maskCoverage?: number
   tags?: string[]
   note?: string
   createdAt: number
@@ -110,6 +112,42 @@ export interface TemplateSaveInput {
   threshold?: number
   tags?: string[]
   note?: string
+  /**
+   * 透明底（可选）：与**裁剪后**模板同尺寸的单通道 PNG，255 = 参与匹配，0 = 忽略。
+   * 用来把图标底下会变的背景抠掉（圆环里透着地形的按钮、压在地图上的半透明控件）。
+   * 省略 = 整块都参与匹配。生成办法见 vision/alpha.ts 的 buildDiffAlpha（多帧差分去底）。
+   */
+  alpha?: ArrayBuffer
+  /**
+   * 透明底的另一种给法（面板「再抓一帧去底」用）：几张与 image **同尺寸**的整帧
+   * （同一控件、同一位置、不同背景），主进程按 crop 做多帧差分去底。与 alpha 同时给时以 alpha 为准。
+   */
+  diffFrames?: ArrayBuffer[]
+  /** 差分容差（RGB 任一通道差值 ≤ 容差视为没变），默认 DEFAULT_ALPHA_DIFF_TOLERANCE。 */
+  diffTolerance?: number
+}
+
+/** 面板「再抓一帧去底」的预览请求：看看差分之后留下了什么。 */
+export interface AlphaPreviewRequest {
+  /** 主帧（模板取色的那帧）。 */
+  image: ArrayBuffer
+  /** 差分帧，必须与 image 同尺寸。 */
+  diffFrames: ArrayBuffer[]
+  /** 在 image 上的裁剪区（image 自己的像素坐标）。 */
+  crop: Rect
+  tolerance?: number
+  /** 预览图宽度上限，默认 360。 */
+  previewWidth?: number
+}
+
+export interface AlphaPreviewResult {
+  /** 不透明像素占比 0~1。 */
+  coverage: number
+  /** 裁剪区尺寸（image 像素）。 */
+  width: number
+  height: number
+  /** 洋红底预览 PNG（洋红 = 抠掉、不参与匹配）。 */
+  previewPng: ArrayBuffer
 }
 
 /** 启动时编译一次、永久复用的模板。 */
@@ -124,9 +162,17 @@ export interface PreparedTemplate {
   refW: number
   refH: number
   shrink: number
+  /** 灰度标准差；透明底模板只统计不透明像素。 */
   std: number
   threshold: number
   defaultRoi?: Rect
+  /**
+   * 透明底掩码（降采样空间，尺寸 w*h，255 = 参与匹配，0 = 忽略）。
+   * 有它时 matchIn 走 OpenCV 带 mask 的 matchTemplate；没有 = 整块参与。
+   */
+  mask?: Uint8Array
+  /** 掩码里不透明像素的占比，仅供展示 / 校验。 */
+  maskCoverage?: number
 }
 
 // ── 匹配 ──────────────────────────────────────────────────────────────────

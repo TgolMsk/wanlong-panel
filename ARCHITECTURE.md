@@ -73,7 +73,12 @@ src/
 │   ├─ worker.ts      utilityProcess 三条链路的消息协议
 │   ├─ errors.ts      ErrorCode 枚举 + AppError + 跨边界序列化
 │   ├─ schemas.ts     zod 运行时校验（mumutool 信封、账号文件、脚本、模板、设置）
-│   └─ defaults.ts    默认设置、空脚本、makeId
+│   ├─ defaults.ts    默认设置、空脚本、makeId
+│   ├─ alerts.ts      告警 / 推送模型、Telegram 配置（★ 含 token 的类型只在主进程用）、formatCst
+│   ├─ scheduler.ts   ETA 调度状态与 scheduler:* 通道
+│   ├─ bot.ts         Telegram 机器人：动作枚举、菜单按钮、回调数据、BotActionPort、bot:* 通道
+│   ├─ stats.ts       数据统计：北京日期键 cstDateKey、DailyStats 日桶、StatsEvent、stats:* 通道
+│   └─ resources.ts   资源统计快照 ResourceSnapshot、中文金额 parseCnAmount / formatCnAmount
 │
 ├─ main/
 │   ├─ index.ts       app 生命周期 + 窗口                            【模块 e】
@@ -82,7 +87,20 @@ src/
 │   ├─ mumu/          mumutool CLI 封装、实例注册表、状态轮询        【模块 a】
 │   ├─ adb/           serial 管理、命令执行、截图、输入、应用管理    【模块 b】
 │   ├─ store/         账号 / 模板库 / 脚本 / 日志的磁盘读写          【模块 d】
-│   └─ orchestrator/  utilityProcess 池、MessageChannel 编排         【模块 d】
+│   ├─ orchestrator/  utilityProcess 池、MessageChannel 编排         【模块 d】
+│   ├─ game/          《万龙觉醒》自动采集：G0~G16 状态机 + 接线层   【功能块，见 README 第 6 节】
+│   │    └─ resources/  「道具 → 资源统计」表：预检 → 导航 → 读表 → 还原   【见 README 第 11 节】
+│   ├─ scheduler/     ETA 记账、定时唤醒、queueFreeHook、exclusive() 借锁、onAutoChanged【见 README 第 6 / 11 节】
+│   ├─ bot/           机器人动作层 createBotActions（Electron 无关，deps 注入）+ bot:* 通道【见 README 第 11 节】
+│   ├─ stats/         数据统计：reduce（纯函数）/ store（日桶文件）/ StatsCenter 日切定时器【见 README 第 11 节】
+│   └─ alerts/        异常检测 → 自动暂停 → Telegram 推送 / 机器人通道 【功能块，见 README 第 7 节】
+│        ├─ detect.ts   只数数（连续失败 / 采样失败 / 长时间停滞），不写盘不发通知不关调度
+│        ├─ kicked.ts   第二层顶号识别（预留；模板缺失时静默降级，绝不抛）
+│        ├─ center.ts   只做动作：暂停实例 / 落盘暂停态 / 推给面板 / 交给推送
+│        ├─ notifier.ts 配置 + 三道闸（开关/订阅/冷却）+ 多通道分发；**不认识「暂停」**
+│        ├─ telegram.ts 一条通道（sendMessage / sendPhoto multipart）；**不认识「实例/调度器」**。★ 持含 token URL 的地方
+│        ├─ telegramBot.ts getUpdates 长轮询、菜单键盘、命令 / 按钮 / 回调 → BotActionPort.perform
+│        └─ store.ts    alerts.json 读写（★ 里面有凭据，报错信息只写路径不写内容）
 │
 ├─ vision/           视觉引擎（纯计算，无 IO 依赖，主进程和 worker 都能 import）【模块 c】
 ├─ worker/           脚本执行器（跑在 utilityProcess 里）            【模块 d】
@@ -185,6 +203,13 @@ src/
 ├─ templates/<setId>/
 │    ├─ manifest.json                TemplateSet（含每个模板的 bounds / defaultRoi / std）
 │    └─ <templateId>.png             模板原图
+├─ scheduler.json                    ETA 调度记账（每实例 auto 开关、队列占用、在途队伍）
+├─ gather-state.json                 采集运行期状态（等级上限缓存 / 在途记账 / 退避档位）
+├─ alerts.json                       ★ 告警配置（含明文 Telegram Bot Token）+ 推送冷却快照
+├─ alerts-pauses.json                每实例暂停态（原因 / 时刻 / 现场截图路径 / 推送结果）
+├─ stats/<YYYY-MM-DD>.json           数据统计日桶（北京日期切；保留 90 天；空桶不落盘）
+├─ shots/alerts/inst<N>-<label>-<ts>.jpg  告警现场截图
+├─ shots/bot/inst<N>-<date>-<time>.jpg    机器人「截图」留痕（shotPolicy = never 时不存）
 ├─ shots/<runId>/<seq>-<stepId>.jpg  截图留痕
 └─ logs/
      ├─ app.ndjson                   面板级日志
@@ -192,6 +217,10 @@ src/
 ```
 
 随包分发的静态资源在 `resources/`（`templates/` 内置模板、`apk/ADBKeyboard.apk`）。
+
+★ **`alerts.json` 是凭据文件**（Telegram Bot Token 存在里面）。整个 `<dataDir>` 已被 `.gitignore`
+覆盖，`.gitignore` 里另外还单独兜了一道 `alerts.json` / `alerts-pauses.json`。
+token 绝不过 IPC 桥、绝不进日志、绝不进报错 —— 出口纪律见 `CLAUDE.md` 项目约定第 15 条。
 
 ---
 

@@ -1,0 +1,32 @@
+{
+  "id": "tset_mtuf7mw40x4t",
+  "name": "冒烟自检",
+  "refWidth": 2560,
+  "refHeight": 1440,
+  "templates": [
+    {
+      "id": "smoke_probe",
+      "name": "冒烟探针",
+      "file": "smoke_probe.png",
+      "authoredWidth": 2560,
+      "authoredHeight": 1440,
+      "bounds": {
+        "x": 2168,
+        "y": 672,
+        "w": 240,
+        "h": 240
+      },
+      "defaultRoi": {
+        "x": 2024,
+        "y": 528,
+        "w": 528,
+        "h": 528
+      },
+      "std": 79.6,
+      "note": "由 scripts/smoke.ts 从真实截图自动裁出，每次冒烟都会覆盖。",
+      "createdAt": 1788977833774,
+      "updatedAt": 1788978259670
+    }
+  ],
+  "updatedAt": 1788978259670
+}

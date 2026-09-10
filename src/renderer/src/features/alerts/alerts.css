@@ -1,0 +1,163 @@
+/* =============================================================================
+ * 异常告警 / 自动暂停 模块的私有样式。
+ *
+ * 规矩（与 features/gather/gather.css 一致）：
+ *   · 颜色**一律**用 tokens.css 的 var(--wl-*)，本文件里不允许出现任何十六进制色值。
+ *   · 只写本模块自己的类（前缀统一 `wla-`），不覆盖 antd 的类，也不改全局。
+ *   · 三种色调对应 @shared/alerts 的 ALERT_SEVERITY_TONE：danger / warning / info。
+ * ========================================================================== */
+
+/* ── 暂停红条 ─────────────────────────────────────────────────────────── */
+
+.wla-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-2);
+  padding: var(--wl-space-3) var(--wl-card-pad);
+  border-left: 3px solid var(--wl-danger);
+  background: var(--wl-danger-soft);
+}
+
+.wla-banner-warning {
+  border-left-color: var(--wl-warning);
+  background: var(--wl-warning-soft);
+}
+
+.wla-banner-info {
+  border-left-color: var(--wl-info);
+  background: var(--wl-info-soft);
+}
+
+/* 独立成块时（不贴在卡片内），补上圆角与描边 */
+.wla-banner-standalone {
+  border-radius: var(--wl-radius-md);
+  border: 1px solid var(--wl-border-subtle);
+  border-left: 3px solid var(--wl-danger);
+}
+
+.wla-banner-head {
+  display: flex;
+  align-items: center;
+  gap: var(--wl-space-2);
+  flex-wrap: wrap;
+}
+
+.wla-banner-title {
+  font-size: var(--wl-fs-subtitle);
+  font-weight: var(--wl-fw-semibold);
+  letter-spacing: var(--wl-ls-tight);
+  color: var(--wl-danger);
+}
+
+.wla-banner-warning .wla-banner-title {
+  color: var(--wl-warning);
+}
+
+.wla-banner-info .wla-banner-title {
+  color: var(--wl-info);
+}
+
+.wla-banner-reason {
+  font-size: var(--wl-fs-body);
+  line-height: var(--wl-lh-body);
+  color: var(--wl-text);
+  word-break: break-word;
+}
+
+.wla-banner-advice {
+  font-size: var(--wl-fs-label);
+  line-height: var(--wl-lh-body);
+  color: var(--wl-text-secondary);
+}
+
+.wla-banner-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--wl-space-3);
+  flex-wrap: wrap;
+  font-size: var(--wl-fs-micro);
+  color: var(--wl-text-tertiary);
+}
+
+.wla-banner-notify-err {
+  font-size: var(--wl-fs-micro);
+  color: var(--wl-warning);
+  word-break: break-word;
+}
+
+.wla-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--wl-space-2);
+  flex-wrap: wrap;
+  padding-top: var(--wl-space-1);
+}
+
+/* 排障细节（step / attempts 这类），等宽字体一行摆开 */
+.wla-detail {
+  display: flex;
+  gap: var(--wl-space-2);
+  flex-wrap: wrap;
+}
+
+.wla-detail-chip {
+  font-family: var(--wl-font-mono);
+  font-size: var(--wl-fs-micro);
+  color: var(--wl-text-tertiary);
+  background: var(--wl-bg-sunken);
+  border-radius: var(--wl-radius-xs);
+  padding: 1px var(--wl-space-2);
+  white-space: nowrap;
+}
+
+/* ── 被暂停的实例卡片：整张标红 ───────────────────────────────────────── */
+
+.wla-card-paused {
+  border-color: var(--wl-danger) !important;
+  box-shadow:
+    var(--wl-shadow-md),
+    0 0 0 1px var(--wl-danger);
+}
+
+/* ── 设置页 ───────────────────────────────────────────────────────────── */
+
+.wla-form-note {
+  font-size: var(--wl-fs-label);
+  line-height: var(--wl-lh-body);
+  color: var(--wl-text-secondary);
+}
+
+.wla-event-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-2);
+}
+
+.wla-event-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--wl-space-2);
+  flex-wrap: wrap;
+}
+
+.wla-event-name {
+  color: var(--wl-text);
+}
+
+.wla-event-pauses {
+  font-size: var(--wl-fs-micro);
+  color: var(--wl-danger);
+  border: 1px solid var(--wl-danger);
+  border-radius: var(--wl-radius-xs);
+  padding: 0 var(--wl-space-1);
+  white-space: nowrap;
+}
+
+/* 现场截图弹窗里的图 */
+.wla-shot-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--wl-radius-sm);
+  background: var(--wl-bg-canvas);
+}

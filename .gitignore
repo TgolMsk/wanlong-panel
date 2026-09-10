@@ -5,10 +5,25 @@ dist/
 .DS_Store
 .vite/
 
-# 开发期运行数据（正式运行时落在 app.getPath('userData')）
-.wl-data/
+# 开发期运行数据（正式运行时落在 app.getPath('userData')）。
+# ★ 只放行模板库 .wl-data/templates/（自动化离不开它，1.5MB），其余（账号、告警配置含 token、统计、截图、日志）一律不进 git。
+.wl-data/*
+!.wl-data/templates/
+
+# 裁模板用的真机截图与放大图（约 300MB），离线自检缺它们会自动跳过
+.tplkit/
+
+# 面板开发日志 / 临时产物
+*.log
+scratchpad/
 
 # 本地覆盖配置（adb / mumutool 路径等）
 wl.config.local.json
 .env
 .env.local
+
+# ★★ 告警/推送配置里有 Telegram Bot Token（凭据）。
+#   正式运行时它落在 app.getPath('userData')，开发期落在 .wl-data/ —— 上面两条已经盖住了。
+#   这里再兜一道：无论谁把它拷到工程里的哪个角落，都不许进 git。
+alerts.json
+alerts-pauses.json

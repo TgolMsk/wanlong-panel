@@ -95,6 +95,7 @@ export const templateDefSchema = z.object({
   defaultRoi: rectSchema.optional(),
   threshold: z.number().min(0).max(1).optional(),
   std: z.number().optional(),
+  maskCoverage: z.number().min(0).max(1).optional(),
   tags: z.array(z.string()).optional(),
   note: z.string().optional(),
   createdAt: z.number(),

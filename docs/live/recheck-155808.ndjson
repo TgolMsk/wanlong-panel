@@ -1,0 +1,21 @@
+{"at":1788994688540,"level":"info","message":"已连接实例 index=0「我的安卓」serial=127.0.0.1:16384，screencap 实测 2560x1440，前台=com.lilithgames.samo.android.cn"}
+{"at":1788994688671,"level":"warn","message":"模板：以下可选模板缺失，相关判据会降级（不影响主流程）：tpl_alliance_own"}
+{"at":1788994688671,"level":"info","message":"模板集 tset_mtugr5sx0iwc：界面模板 40 张，字形集 7 套，缺 1 张：tpl_alliance_own"}
+{"at":1788994689403,"level":"debug","message":"读到「行军队列 N/M」= 3/5","data":{"field":"行军队列 N/M","text":"3/5","minScore":0.9499}}
+{"at":1788994689419,"level":"warn","message":"「第 1 行目标坐标」识别失败：连续 1 次都读不出可信的值（最后一次读到「693,559」，接受阈值 0.9）","data":{"field":"第 1 行目标坐标","glyphSet":"dig_card_coord","roi":{"x":1208,"y":302,"w":176,"h":44},"lastText":"693,559","minScore":0.9}}
+{"at":1788994689416,"level":"debug","message":"读到「第 1 行倒计时」= 08:47:39","data":{"field":"第 1 行倒计时","text":"08:47:39","minScore":0.9113}}
+{"at":1788994689421,"level":"debug","message":"读到「第 1 行指挥官耐力」= 105/105","data":{"field":"第 1 行指挥官耐力","text":"105/105","minScore":0.9467}}
+{"at":1788994689429,"level":"debug","message":"读到「第 2 行倒计时」= 09:07:23","data":{"field":"第 2 行倒计时","text":"09:07:23","minScore":0.9119}}
+{"at":1788994689431,"level":"warn","message":"「第 2 行目标坐标」识别失败：连续 1 次都读不出可信的值（最后一次读到「691,556」，接受阈值 0.9）","data":{"field":"第 2 行目标坐标","glyphSet":"dig_card_coord","roi":{"x":1208,"y":546,"w":176,"h":44},"lastText":"691,556","minScore":0.9}}
+{"at":1788994689440,"level":"debug","message":"读到「第 3 行倒计时」= 03:25:41","data":{"field":"第 3 行倒计时","text":"03:25:41","minScore":0.8096}}
+{"at":1788994689442,"level":"warn","message":"「第 3 行目标坐标」识别失败：连续 1 次都读不出可信的值（最后一次读到「697,566」，接受阈值 0.9）","data":{"field":"第 3 行目标坐标","glyphSet":"dig_card_coord","roi":{"x":1208,"y":788,"w":176,"h":44},"lastText":"697,566","minScore":0.9}}
+{"at":1788994689443,"level":"info","message":"部队管理：队列 3/5，解析出 3 行。","data":{"queueUsed":3,"queueTotal":5,"rows":[{"index":1,"status":"gathering","remainingSec":31659,"coord":null},{"index":2,"status":"gathering","remainingSec":32843,"coord":null},{"index":3,"status":"gathering","remainingSec":12341,"coord":null}]}}
+{"at":1788994842257,"level":"debug","message":"读到「行军队列 N/M」= 3/5","data":{"field":"行军队列 N/M","text":"3/5","minScore":0.9499}}
+{"at":1788994842266,"level":"debug","message":"读到「第 1 行倒计时」= 08:45:06","data":{"field":"第 1 行倒计时","text":"08:45:06","minScore":0.9193}}
+{"at":1788994842268,"level":"warn","message":"「第 1 行目标坐标」识别失败：连续 1 次都读不出可信的值（最后一次读到「693,559」，接受阈值 0.9）","data":{"field":"第 1 行目标坐标","glyphSet":"dig_card_coord","roi":{"x":1208,"y":302,"w":176,"h":44},"lastText":"693,559","minScore":0.9}}
+{"at":1788994842270,"level":"debug","message":"读到「第 1 行指挥官耐力」= 105/105","data":{"field":"第 1 行指挥官耐力","text":"105/105","minScore":0.9467}}
+{"at":1788994842279,"level":"debug","message":"读到「第 2 行倒计时」= 09:04:50","data":{"field":"第 2 行倒计时","text":"09:04:50","minScore":0.9119}}
+{"at":1788994842290,"level":"debug","message":"读到「第 3 行倒计时」= 03:23:09","data":{"field":"第 3 行倒计时","text":"03:23:09","minScore":0.7847}}
+{"at":1788994842291,"level":"warn","message":"「第 3 行目标坐标」识别失败：连续 1 次都读不出可信的值（最后一次读到「697,566」，接受阈值 0.9）","data":{"field":"第 3 行目标坐标","glyphSet":"dig_card_coord","roi":{"x":1208,"y":788,"w":176,"h":44},"lastText":"697,566","minScore":0.9}}
+{"at":1788994842292,"level":"info","message":"部队管理：队列 3/5，解析出 3 行。","data":{"queueUsed":3,"queueTotal":5,"rows":[{"index":1,"status":"gathering","remainingSec":31506,"coord":null},{"index":2,"status":"gathering","remainingSec":32690,"coord":null},{"index":3,"status":"gathering","remainingSec":12189,"coord":null}]}}
+{"at":1788994842281,"level":"warn","message":"「第 2 行目标坐标」识别失败：连续 1 次都读不出可信的值（最后一次读到「691,556」，接受阈值 0.9）","data":{"field":"第 2 行目标坐标","glyphSet":"dig_card_coord","roi":{"x":1208,"y":546,"w":176,"h":44},"lastText":"691,556","minScore":0.9}}

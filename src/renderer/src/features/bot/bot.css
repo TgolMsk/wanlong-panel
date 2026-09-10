@@ -1,0 +1,100 @@
+/* =============================================================================
+ * 「Telegram 机器人 · 在面板内测试动作」卡片的私有样式。
+ *
+ * 规矩（与 features/alerts/alerts.css 一致）：
+ *   · 颜色**一律**用 tokens.css 的 var(--wl-*)，不允许出现任何十六进制色值。
+ *   · 只写本模块自己的类（前缀统一 `wlb-`），不覆盖 antd 的类，也不改全局。
+ * ========================================================================== */
+
+.wlb-quick {
+  display: flex;
+  align-items: center;
+  gap: var(--wl-space-2);
+  flex-wrap: wrap;
+}
+
+.wlb-form {
+  display: flex;
+  align-items: center;
+  gap: var(--wl-space-2);
+  flex-wrap: wrap;
+}
+
+.wlb-note {
+  font-size: var(--wl-fs-label);
+  line-height: var(--wl-lh-body);
+  color: var(--wl-text-secondary);
+}
+
+/* 结果区：凹槽里放文本 / 图片 / 按钮 */
+.wlb-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-3);
+  padding: var(--wl-space-3) var(--wl-space-4);
+}
+
+.wlb-result-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--wl-space-3);
+  flex-wrap: wrap;
+}
+
+/* 机器人回复原文：等宽、保留换行，就是手机上会看到的那段字 */
+.wlb-text {
+  margin: 0;
+  font-family: var(--wl-font-mono);
+  font-size: var(--wl-fs-mono);
+  line-height: var(--wl-lh-body);
+  color: var(--wl-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.wlb-photo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-2);
+}
+
+.wlb-photo-img {
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  height: auto;
+  border-radius: var(--wl-radius-sm);
+  background: var(--wl-bg-canvas);
+  border: 1px solid var(--wl-border-subtle);
+}
+
+.wlb-caption {
+  margin: 0;
+  font-size: var(--wl-fs-label);
+  line-height: var(--wl-lh-body);
+  color: var(--wl-text-secondary);
+  white-space: pre-wrap;
+}
+
+/* 内联按钮：按 Telegram 的行列摆 */
+.wlb-keyboard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-2);
+}
+
+.wlb-keyboard-row {
+  display: flex;
+  gap: var(--wl-space-2);
+  flex-wrap: wrap;
+}
+
+.wlb-error {
+  color: var(--wl-danger);
+  font-size: var(--wl-fs-body);
+  line-height: var(--wl-lh-body);
+  word-break: break-word;
+}

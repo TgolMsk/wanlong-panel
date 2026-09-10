@@ -1,0 +1,489 @@
+/* =============================================================================
+ * 万龙控制面板 · 设计令牌（Design Tokens）
+ * -----------------------------------------------------------------------------
+ * 【本文件是冻结契约，下游所有 UI 代码都引用它。除非用户改风格规范，否则不要改这里的值。】
+ *
+ * 风格来源：lan-send/docs/ui-style-reference.md（用户指定）
+ *   最暗底 #050517 · 深靛 #18185C · 靛紫 #4444A3 · 近白 #FAFAFD
+ *   深灰蓝文字 #3D434D · 次要文字薰衣草灰 #9FA1D4 · 强调薄荷绿 #1BEE79
+ *
+ * 三条硬规矩：
+ *   1. **默认暗色**。所有变量在 `:root` 上给的就是暗色值；亮色只在 `[data-theme="light"]`
+ *      里覆盖差异项。切换主题 = 改 `document.documentElement.dataset.theme`，别的什么都不用动。
+ *   2. **业务代码只允许写 `var(--wl-*)`，禁止再出现裸十六进制色**。
+ *      Canvas / Konva 这类吃不了 CSS 变量的地方，从 `./antd-theme.ts` 导出的
+ *      `WL_PALETTE` / `WL_CANVAS` 里取字面量，同样不要自己编颜色。
+ *   3. 这里的色值与 `./antd-theme.ts` 里的字面量**必须一一对应**。改一处就得改另一处，
+ *      两份东西是同一套令牌的两种消费方式（CSS 侧 / antd CSS-in-JS 侧）。
+ *
+ * 命名体系：`--wl-<类别>-<角色>[-<变体>]`
+ *   bg 背景 / border 描边 / text 文字 / accent 强调 / 语义色 / chart 图表
+ *   radius 圆角 / shadow 阴影 / font·fs·fw·ls·lh 排版 / space 间距 / layout 布局 / dur·ease 动效
+ *
+ * 注：CSP 是 `default-src 'self'`，**拉不了 Google Fonts**。字体栈只能用本机已有的字体，
+ *     Inter / Manrope 装了就用，没装则退到 SF Pro / 苹方，视觉上仍是几何无衬线。
+ * ========================================================================== */
+
+:root {
+  color-scheme: dark;
+
+  /* ── 品牌固定色（不随主题变，用于图表、徽标、Canvas 标注）──────────────── */
+  --wl-brand-ink: #050517; /* 最暗底 */
+  --wl-brand-indigo: #18185c; /* 深靛 */
+  --wl-brand-violet: #4444a3; /* 靛紫，渐变终点 / 亮色模式强调色 */
+  --wl-brand-paper: #fafafd; /* 近白 */
+  --wl-brand-slate: #3d434d; /* 深灰蓝文字（亮色模式正文） */
+  --wl-brand-lavender: #9fa1d4; /* 薰衣草灰（次要文字） */
+  --wl-brand-mint: #1bee79; /* 薄荷绿（暗色模式强调色） */
+
+  /* ── 背景 ────────────────────────────────────────────────────────────── */
+  --wl-bg-base: #050517; /* 窗口底色，body 用 */
+  /* 全局渐变：#050517 → #4444A3。用两团柔光叠一层线性渐变，
+     避免整块紫底压在密集表格下面刺眼。挂在 body 上，fixed 不随滚动跑。 */
+  --wl-bg-gradient:
+    radial-gradient(1200px 820px at 84% -12%, rgba(68, 68, 163, 0.5) 0%, rgba(68, 68, 163, 0) 62%),
+    radial-gradient(920px 720px at -12% 112%, rgba(24, 24, 92, 0.72) 0%, rgba(24, 24, 92, 0) 66%),
+    linear-gradient(158deg, #050517 0%, #0a0a24 100%);
+  --wl-bg-layout: transparent; /* Layout / Content：透出 body 渐变 */
+  --wl-bg-sunken: rgba(3, 3, 16, 0.55); /* 比卡片更低一层：日志区、画面容器 */
+  --wl-bg-surface: rgba(255, 255, 255, 0.055); /* 毛玻璃卡片填充 */
+  --wl-bg-surface-hover: rgba(255, 255, 255, 0.085);
+  --wl-bg-surface-active: rgba(255, 255, 255, 0.12);
+  --wl-bg-elevated: #141438; /* 浮层必须不透明：下拉、弹窗、抽屉、气泡 */
+  --wl-bg-spotlight: #1c1c4a; /* Tooltip 这类反差浮层 */
+  --wl-bg-mask: rgba(5, 5, 23, 0.72); /* 模态遮罩 */
+  --wl-bg-canvas: #04040f; /* 画面预览 / 模板画布的底 */
+  --wl-bg-blur: rgba(10, 10, 36, 0.72); /* 需要 backdrop-filter 的固定条 */
+  --wl-blur-glass: saturate(150%) blur(18px);
+
+  /* ── 描边与分割 ─────────────────────────────────────────────────────── */
+  --wl-border: rgba(255, 255, 255, 0.14);
+  --wl-border-strong: rgba(255, 255, 255, 0.24);
+  --wl-border-subtle: rgba(255, 255, 255, 0.08);
+  --wl-split: rgba(255, 255, 255, 0.08); /* 表格行线、列表分隔 */
+  --wl-hairline-top: rgba(255, 255, 255, 0.22); /* 毛玻璃卡上沿的细高光 */
+
+  /* ── 文字 ────────────────────────────────────────────────────────────── */
+  --wl-text: #fafafd;
+  --wl-text-heading: #ffffff;
+  --wl-text-secondary: #9fa1d4;
+  --wl-text-tertiary: rgba(159, 161, 212, 0.68);
+  --wl-text-disabled: rgba(159, 161, 212, 0.4);
+  --wl-text-on-accent: #050517; /* 薄荷绿按钮上的深色字 */
+  --wl-text-inverse: #3d434d;
+
+  /* ── 强调色（暗色 = 薄荷绿）────────────────────────────────────────────
+     所有"主操作"都用它：主按钮、选中态、进度、关键数字高亮。 */
+  --wl-accent: #1bee79;
+  --wl-accent-hover: #4df396;
+  --wl-accent-active: #12c862;
+  --wl-accent-soft: rgba(27, 238, 121, 0.14); /* 选中背景 / 弱底 */
+  --wl-accent-soft-hover: rgba(27, 238, 121, 0.2);
+  --wl-accent-border: rgba(27, 238, 121, 0.42);
+  --wl-accent-glow: rgba(27, 238, 121, 0.34); /* 阴影/光晕用 */
+
+  /* ── 语义色（暗色下一律取高亮版，保证在深底上可读）───────────────────── */
+  --wl-success: #1bee79;
+  --wl-success-soft: rgba(27, 238, 121, 0.14);
+  --wl-warning: #ffc46b;
+  --wl-warning-soft: rgba(255, 196, 107, 0.16);
+  --wl-danger: #ff6b7a;
+  --wl-danger-soft: rgba(255, 107, 122, 0.16);
+  --wl-info: #6c8cff;
+  --wl-info-soft: rgba(108, 140, 255, 0.16);
+  --wl-neutral: #9fa1d4;
+  --wl-neutral-soft: rgba(159, 161, 212, 0.14);
+
+  /* ── 图表（规范：单色线，靛蓝→亮蓝，粗描边，平滑曲线，当前点实心圆）──── */
+  --wl-chart-line-from: #4444a3;
+  --wl-chart-line-to: #58a6ff;
+  --wl-chart-area-from: rgba(88, 166, 255, 0.28);
+  --wl-chart-area-to: rgba(88, 166, 255, 0);
+  --wl-chart-dot: #58a6ff;
+  --wl-chart-dot-ring: rgba(88, 166, 255, 0.28);
+  --wl-chart-grid: rgba(255, 255, 255, 0.07);
+  --wl-chart-axis: rgba(159, 161, 212, 0.6);
+  --wl-chart-stroke-width: 2.5px;
+  /* 需要多序列时按序取，别自己新配 */
+  --wl-series-1: #58a6ff;
+  --wl-series-2: #1bee79;
+  --wl-series-3: #9f7bff;
+  --wl-series-4: #ffc46b;
+  --wl-series-5: #ff6b7a;
+  --wl-series-6: #4dd7d1;
+
+  /* ── 圆角（规范：16–24px）─────────────────────────────────────────────── */
+  --wl-radius-xs: 8px; /* Tag、极小控件 */
+  --wl-radius-sm: 12px; /* 输入框、下拉、小按钮 */
+  --wl-radius-md: 16px; /* 内嵌小卡、弹出面板 */
+  --wl-radius-card: 20px; /* 主卡片 */
+  --wl-radius-lg: 24px; /* 抽屉、大模态 */
+  --wl-radius-pill: 999px; /* 按钮一律药丸形 */
+
+  /* ── 阴影（规范：非常柔和且拉长）──────────────────────────────────────── */
+  --wl-shadow-xs: 0 2px 10px -4px rgba(5, 5, 23, 0.5);
+  --wl-shadow-sm: 0 8px 24px -12px rgba(5, 5, 23, 0.6);
+  --wl-shadow-md: 0 18px 44px -18px rgba(5, 5, 23, 0.7);
+  --wl-shadow-lg: 0 34px 80px -30px rgba(5, 5, 23, 0.78);
+  --wl-shadow-accent: 0 12px 30px -12px var(--wl-accent-glow);
+  --wl-shadow-inset-hi: inset 0 1px 0 0 var(--wl-hairline-top); /* 毛玻璃高光描边 */
+
+  /* ── 字体 ────────────────────────────────────────────────────────────── */
+  --wl-font-sans: 'Inter', 'Manrope', 'SF Pro Display', -apple-system, BlinkMacSystemFont,
+    'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial,
+    sans-serif;
+  --wl-font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, Consolas, 'PingFang SC',
+    monospace;
+
+  /* ── 字号层级（规范：标题 > 关键数字 > 标签，三档要拉开）────────────────
+     display 只给欢迎页/空态这类大标题；metric 给关键数字；label 给小字标签。 */
+  --wl-fs-display: 34px;
+  --wl-fs-title: 24px; /* 页面主标题 */
+  --wl-fs-heading: 18px; /* 卡片标题 */
+  --wl-fs-subtitle: 15px; /* 小节标题 */
+  --wl-fs-body: 13px; /* 正文基准（面板信息密集，13 比 14 更合适） */
+  --wl-fs-label: 12px; /* 标签、表头 */
+  --wl-fs-micro: 11px; /* 角标、时间戳 */
+  --wl-fs-metric: 28px; /* 关键数字 */
+  --wl-fs-metric-sm: 20px; /* 次级数字 */
+  --wl-fs-mono: 12px; /* 日志、serial、坐标 */
+
+  /* ── 字重（规范：标题超大号但中等字重）──────────────────────────────── */
+  --wl-fw-regular: 400;
+  --wl-fw-medium: 500;
+  --wl-fw-semibold: 600;
+
+  /* ── 字距 / 行高（规范：字距略紧、行高紧凑）──────────────────────────── */
+  --wl-ls-display: -0.03em;
+  --wl-ls-title: -0.02em;
+  --wl-ls-tight: -0.01em;
+  --wl-ls-normal: 0;
+  --wl-ls-label: 0.06em; /* 小字标签配 uppercase / 中文也可拉开 */
+  --wl-lh-display: 1.08;
+  --wl-lh-title: 1.16;
+  --wl-lh-heading: 1.28;
+  --wl-lh-body: 1.55;
+  --wl-lh-tight: 1.3;
+
+  /* ── 间距（4 的倍数）─────────────────────────────────────────────────── */
+  --wl-space-1: 4px;
+  --wl-space-2: 8px;
+  --wl-space-3: 12px;
+  --wl-space-4: 16px;
+  --wl-space-5: 20px;
+  --wl-space-6: 24px;
+  --wl-space-7: 32px;
+  --wl-space-8: 40px;
+
+  /* ── 布局常量（App 骨架用，改这里就能整体调）───────────────────────── */
+  --wl-layout-header-h: 60px;
+  --wl-layout-sider-w: 200px;
+  --wl-layout-sider-w-collapsed: 68px;
+  --wl-layout-content-pad: 20px;
+  --wl-card-pad: 20px;
+  --wl-card-pad-sm: 14px;
+  --wl-control-h: 34px;
+  --wl-control-h-sm: 26px;
+  --wl-control-h-lg: 42px;
+
+  /* ── 动效 ────────────────────────────────────────────────────────────── */
+  --wl-dur-fast: 120ms;
+  --wl-dur: 200ms;
+  --wl-dur-slow: 320ms;
+  --wl-ease: cubic-bezier(0.22, 0.61, 0.36, 1); /* 通用缓出 */
+  --wl-ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
+  --wl-transition: all var(--wl-dur) var(--wl-ease);
+
+  /* ── 层级 ────────────────────────────────────────────────────────────── */
+  --wl-z-sticky: 10;
+  --wl-z-header: 20;
+  --wl-z-overlay: 100;
+}
+
+/* =============================================================================
+ * 亮色模式：只覆盖与暗色不同的项。
+ * 规范：底 #FAFAFD、文字 #3D434D、强调 #4444A3（薄荷绿在亮色下降级为"成功色"）。
+ * ========================================================================== */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --wl-bg-base: #fafafd;
+  --wl-bg-gradient:
+    radial-gradient(1000px 720px at 86% -14%, rgba(68, 68, 163, 0.1) 0%, rgba(68, 68, 163, 0) 62%),
+    radial-gradient(880px 680px at -10% 110%, rgba(24, 24, 92, 0.07) 0%, rgba(24, 24, 92, 0) 66%),
+    linear-gradient(158deg, #fafafd 0%, #f1f1f8 100%);
+  --wl-bg-sunken: rgba(61, 67, 77, 0.05);
+  --wl-bg-surface: #ffffff; /* 亮色下卡片是实心白卡 */
+  --wl-bg-surface-hover: #f6f6fb;
+  --wl-bg-surface-active: #eeeef7;
+  --wl-bg-elevated: #ffffff;
+  --wl-bg-spotlight: #18185c;
+  --wl-bg-mask: rgba(24, 24, 92, 0.35);
+  --wl-bg-canvas: #1a1a2e;
+  --wl-bg-blur: rgba(250, 250, 253, 0.78);
+
+  --wl-border: rgba(68, 68, 163, 0.16);
+  --wl-border-strong: rgba(68, 68, 163, 0.32);
+  --wl-border-subtle: rgba(68, 68, 163, 0.09);
+  --wl-split: rgba(61, 67, 77, 0.09);
+  --wl-hairline-top: rgba(255, 255, 255, 0.9);
+
+  --wl-text: #3d434d;
+  --wl-text-heading: #1b1f2a;
+  --wl-text-secondary: #7a7db5;
+  --wl-text-tertiary: #9fa1d4;
+  --wl-text-disabled: rgba(159, 161, 212, 0.62);
+  --wl-text-on-accent: #fafafd;
+  --wl-text-inverse: #fafafd;
+
+  --wl-accent: #4444a3;
+  --wl-accent-hover: #5757bd;
+  --wl-accent-active: #33337f;
+  --wl-accent-soft: rgba(68, 68, 163, 0.1);
+  --wl-accent-soft-hover: rgba(68, 68, 163, 0.16);
+  --wl-accent-border: rgba(68, 68, 163, 0.38);
+  --wl-accent-glow: rgba(68, 68, 163, 0.28);
+
+  --wl-success: #0fa958;
+  --wl-success-soft: rgba(15, 169, 88, 0.12);
+  --wl-warning: #c07800;
+  --wl-warning-soft: rgba(192, 120, 0, 0.12);
+  --wl-danger: #d93a4c;
+  --wl-danger-soft: rgba(217, 58, 76, 0.1);
+  --wl-info: #3a5bd9;
+  --wl-info-soft: rgba(58, 91, 217, 0.1);
+  --wl-neutral: #7a7db5;
+  --wl-neutral-soft: rgba(122, 125, 181, 0.12);
+
+  --wl-chart-line-from: #4444a3;
+  --wl-chart-line-to: #2f7de0;
+  --wl-chart-area-from: rgba(47, 125, 224, 0.2);
+  --wl-chart-area-to: rgba(47, 125, 224, 0);
+  --wl-chart-dot: #2f7de0;
+  --wl-chart-dot-ring: rgba(47, 125, 224, 0.22);
+  --wl-chart-grid: rgba(61, 67, 77, 0.08);
+  --wl-chart-axis: rgba(61, 67, 77, 0.55);
+  --wl-series-1: #2f7de0;
+  --wl-series-2: #0fa958;
+  --wl-series-3: #7a4bd6;
+  --wl-series-4: #c07800;
+  --wl-series-5: #d93a4c;
+  --wl-series-6: #1a9c96;
+
+  --wl-shadow-xs: 0 2px 8px -4px rgba(61, 67, 77, 0.16);
+  --wl-shadow-sm: 0 8px 24px -14px rgba(61, 67, 77, 0.22);
+  --wl-shadow-md: 0 18px 44px -20px rgba(61, 67, 77, 0.24);
+  --wl-shadow-lg: 0 34px 80px -32px rgba(61, 67, 77, 0.26);
+  --wl-shadow-accent: 0 12px 30px -14px var(--wl-accent-glow);
+  --wl-shadow-inset-hi: inset 0 1px 0 0 var(--wl-hairline-top);
+}
+
+/* =============================================================================
+ * 全局基座
+ * index.html 里没有 CSS reset，body 默认 8px 外边距会把 height:100vh 的 Layout 撑出滚动条。
+ * 原先这段样式是 main.tsx 用 <style> 注入的，现在收编到这里，main.tsx 只 import 本文件。
+ * ========================================================================== */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--wl-bg-base);
+  background-image: var(--wl-bg-gradient);
+  background-attachment: fixed;
+  color: var(--wl-text);
+  font-family: var(--wl-font-sans);
+  font-size: var(--wl-fs-body);
+  line-height: var(--wl-lh-body);
+  letter-spacing: var(--wl-ls-normal);
+  overflow: hidden; /* 滚动交给内部容器，窗口本身不滚 */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 数字统一表格数字，避免倒计时/端口号跳字宽 */
+body {
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: var(--wl-accent-soft-hover);
+  color: var(--wl-text);
+}
+
+/* 滚动条：细、无轨道、悬停才明显 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--wl-border);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: var(--wl-radius-pill);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--wl-border-strong);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* =============================================================================
+ * 冻结的工具类
+ * 两个下游 agent（主题重构 / 新组件）都可以直接用这些类名，但**都不许改本文件**。
+ * 需要新样式请写在各自负责的文件里，不要往这加。
+ * ========================================================================== */
+
+/** 毛玻璃深色卡：低透明度白填充 + 细高光描边 + 柔长阴影 */
+.wl-glass {
+  background: var(--wl-bg-surface);
+  border: 1px solid var(--wl-border-subtle);
+  border-radius: var(--wl-radius-card);
+  box-shadow: var(--wl-shadow-sm), var(--wl-shadow-inset-hi);
+  backdrop-filter: var(--wl-blur-glass);
+  -webkit-backdrop-filter: var(--wl-blur-glass);
+}
+
+/** 实心卡（亮色模式的白卡；暗色下是不透明的深卡，用于浮层内部） */
+.wl-solid {
+  background: var(--wl-bg-elevated);
+  border: 1px solid var(--wl-border-subtle);
+  border-radius: var(--wl-radius-card);
+  box-shadow: var(--wl-shadow-sm);
+}
+
+/** 比卡片更低一层的凹槽：日志区、画面容器 */
+.wl-sunken {
+  background: var(--wl-bg-sunken);
+  border: 1px solid var(--wl-border-subtle);
+  border-radius: var(--wl-radius-md);
+}
+
+/** 页面主标题：超大号 + 中等字重 + 紧字距紧行高 */
+.wl-title {
+  font-size: var(--wl-fs-title);
+  font-weight: var(--wl-fw-medium);
+  letter-spacing: var(--wl-ls-title);
+  line-height: var(--wl-lh-title);
+  color: var(--wl-text-heading);
+  margin: 0;
+}
+
+/** 卡片/小节标题 */
+.wl-heading {
+  font-size: var(--wl-fs-heading);
+  font-weight: var(--wl-fw-medium);
+  letter-spacing: var(--wl-ls-tight);
+  line-height: var(--wl-lh-heading);
+  color: var(--wl-text-heading);
+  margin: 0;
+}
+
+/** 关键数字 */
+.wl-metric {
+  font-size: var(--wl-fs-metric);
+  font-weight: var(--wl-fw-semibold);
+  letter-spacing: var(--wl-ls-title);
+  line-height: var(--wl-lh-title);
+  color: var(--wl-text);
+  font-variant-numeric: tabular-nums;
+}
+.wl-metric-sm {
+  font-size: var(--wl-fs-metric-sm);
+  font-weight: var(--wl-fw-semibold);
+  letter-spacing: var(--wl-ls-tight);
+  line-height: var(--wl-lh-tight);
+  font-variant-numeric: tabular-nums;
+}
+.wl-metric-accent {
+  color: var(--wl-accent);
+}
+
+/** 小字标签：小字号、低对比薰衣草灰 */
+.wl-label {
+  font-size: var(--wl-fs-label);
+  font-weight: var(--wl-fw-regular);
+  letter-spacing: var(--wl-ls-label);
+  line-height: var(--wl-lh-tight);
+  color: var(--wl-text-secondary);
+}
+.wl-micro {
+  font-size: var(--wl-fs-micro);
+  color: var(--wl-text-tertiary);
+  line-height: var(--wl-lh-tight);
+}
+
+/** 等宽：serial、坐标、日志 */
+.wl-mono {
+  font-family: var(--wl-font-mono);
+  font-size: var(--wl-fs-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/** 纵向滚动容器（内容区、日志、列表都用它，滚动条样式统一） */
+.wl-scroll-y {
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+/** 顶栏这类需要浮在渐变上的固定条 */
+.wl-blur-bar {
+  background: var(--wl-bg-blur);
+  backdrop-filter: var(--wl-blur-glass);
+  -webkit-backdrop-filter: var(--wl-blur-glass);
+  border-bottom: 1px solid var(--wl-border-subtle);
+}
+
+/** 可点击卡片/行的统一悬停反馈 */
+.wl-hoverable {
+  transition:
+    background-color var(--wl-dur) var(--wl-ease),
+    border-color var(--wl-dur) var(--wl-ease),
+    transform var(--wl-dur) var(--wl-ease);
+}
+.wl-hoverable:hover {
+  background: var(--wl-bg-surface-hover);
+  border-color: var(--wl-border);
+}
+
+/** 选中态（左侧导航、模板列表、脚本列表共用） */
+.wl-selected {
+  background: var(--wl-accent-soft);
+  border-color: var(--wl-accent-border);
+  color: var(--wl-accent);
+}
+
+/* 系统要求减少动效时全部关掉 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ★ 固定列必须不透明：毛玻璃底会把被它盖住的相邻列透出来，看起来像"列重叠"（实例管理表实测）。
+   antd 6 的表格实现是 @rc-component/table，固定单元格类名是 -fix-start / -fix-end（不是 v5 的 -fix-left / -fix-right）。
+   antd 自己给它设的是 tableBg（本主题是透明毛玻璃色），这里用 !important 覆盖成实心浮层色。 */
+.ant-table-wrapper .ant-table-cell.ant-table-cell-fix-start,
+.ant-table-wrapper .ant-table-cell.ant-table-cell-fix-end,
+.ant-table-wrapper .ant-table-thead > tr > th.ant-table-cell-fix-start,
+.ant-table-wrapper .ant-table-thead > tr > th.ant-table-cell-fix-end,
+.ant-table-wrapper .ant-table-tbody > tr > td.ant-table-cell-fix-start,
+.ant-table-wrapper .ant-table-tbody > tr > td.ant-table-cell-fix-end,
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-row:hover > td.ant-table-cell-fix-start,
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-row:hover > td.ant-table-cell-fix-end {
+  background: var(--wl-bg-elevated, #141438) !important;
+}

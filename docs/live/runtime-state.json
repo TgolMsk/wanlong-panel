@@ -1,0 +1,52 @@
+{
+  "maxLevel": 8,
+  "maxLevelProbedAt": 1788993205292,
+  "backoffIndex": 0,
+  "giveUpUntil": null,
+  "dispatchTimestamps": [
+    1788993529059,
+    1788994499749
+  ],
+  "inFlight": [
+    {
+      "rowIndex": 1,
+      "coord": null,
+      "status": "gatherMarching",
+      "remainingSec": null,
+      "sampledAt": 1788994501751,
+      "travelTimeSec": null,
+      "etaAt": 1788995101751,
+      "freeAt": 1788995701751,
+      "ownDispatch": false
+    },
+    {
+      "rowIndex": 2,
+      "coord": null,
+      "status": "gathering",
+      "remainingSec": 33030,
+      "sampledAt": 1788994501751,
+      "travelTimeSec": null,
+      "etaAt": 1789027531751,
+      "freeAt": 1789027631751,
+      "ownDispatch": false
+    },
+    {
+      "rowIndex": 3,
+      "coord": null,
+      "status": "gathering",
+      "remainingSec": 12529,
+      "sampledAt": 1788994501751,
+      "travelTimeSec": null,
+      "etaAt": 1789007030751,
+      "freeAt": 1789007130751,
+      "ownDispatch": false
+    }
+  ],
+  "lastPanelSampledAt": 1788994501751,
+  "travelTimeByCoord": {
+    "661,556": 69
+  },
+  "resourceByCoord": {
+    "661,556": "wood"
+  }
+}
