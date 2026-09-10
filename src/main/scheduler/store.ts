@@ -145,6 +145,7 @@ function sanitizeMarch(raw: unknown): MarchState | null {
       : [],
     remainingMs: numOrNull(m.remainingMs),
     resourceType: resourceOrNull(m.resourceType),
+    fillRatio: numOrNull(m.fillRatio),
     timerEndsAt: numOrNull(m.timerEndsAt),
     gatherDoneAt: numOrNull(m.gatherDoneAt),
     freeAt: numOrNull(m.freeAt),

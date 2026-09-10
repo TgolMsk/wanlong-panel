@@ -90,6 +90,13 @@ const COORD_LABEL_REL: Rect = { x: 1085, y: 40, w: 390, h: 72 }
  * 上面压着「⛏ 载重」角标、下面紧挨「坐标:」，模板只框 -52..+52 的本体。
  */
 const THUMB_REL: Rect = { x: 1105, y: -70, w: 230, h: 150 }
+/**
+ * 载重进度条的内部区域（相对 rowY）：白描边在 +29 / +65，内部绿色（填充）或灰色（未填）+32..+62；
+ * 横向 1432..1936（左端 1405..1430 被菱形图标压着）。中间压着白字，所以只在贴近上下边的两条线上扫。
+ */
+const FILL_BAR_X0 = 1432
+const FILL_BAR_X1 = 1936
+const FILL_SCAN_LINES_REL = [33, 61]
 /** 「采集中」菱形图标（白镐）的搜索带（相对 rowY）。图标实测 1365..1423 / +19..+76。 */
 const STATUS_ICON_REL: Rect = { x: 1345, y: 5, w: 100, h: 85 }
 /**
@@ -143,6 +150,8 @@ export interface RowSample {
   targetCoord: string | null
   troopCount: number | null
   commanders: StaminaValue[]
+  /** 采集中行的载重进度条绿色占比（0~1），读不到为 null。 */
+  fillRatio: number | null
   /** 按行左侧资源点缩略图识别出的资源类型；行军中/返回中（缩略图是部队图）或没模板时为 null。 */
   resourceType: MarchResourceType | null
   warning?: string
@@ -241,7 +250,7 @@ async function ensurePanelOpen(
   io: SampleIo,
   t: SchedulerTemplates,
   opts: SampleOptions
-): Promise<{ ui: PreparedFrame; digits: PreparedFrame; noMarches?: boolean }> {
+): Promise<{ ui: PreparedFrame; digits: PreparedFrame; raw: RawFrame; noMarches?: boolean }> {
   const title = requireUi(t, TPL.panelTitle)
   const entryIcon = optionalUi(t, TPL.queueIconMap)
   // ★ 世界地图判据必须是 anyTemplate：放大镜镜片半透明、分数随地形漂移（见 templates.ts）；
@@ -261,7 +270,7 @@ async function ensurePanelOpen(
     const hit = await matchIn(frame.ui, title, { roi: PANEL_TITLE_ROI })
     if (hit.found) {
       io.log?.('debug', `部队管理面板已打开（标题命中 ${hit.score}）。`)
-      return { ui: frame.ui, digits: frame.digits }
+      return { ui: frame.ui, digits: frame.digits, raw: frame.raw }
     }
 
     const onMap = await firstHit(frame.ui, worldMap)
@@ -275,7 +284,7 @@ async function ensurePanelOpen(
             'info',
             `世界地图右侧没有部队管理入口（${e.score.toFixed(3)}）⇒ 判定没有队伍在野外，本次按空队列处理。`
           )
-          return { ui: frame.ui, digits: frame.digits, noMarches: true }
+          return { ui: frame.ui, digits: frame.digits, raw: frame.raw, noMarches: true }
         }
       }
       io.log?.('info', `当前在世界地图（${onMap.id} 命中 ${onMap.score}），点右侧列表图标打开部队管理面板。`)
@@ -557,6 +566,45 @@ async function readRowTimer(
   return { ms, warning: r.reason }
 }
 
+/**
+ * 读载重进度条的绿色占比（轻量版：两条扫描线，各几百个像素，误差几个百分点，够面板画进度条）。
+ * 绿 = 填充（g 明显高于 r/b），灰 = 未填（三通道接近），其余（白字、描边）忽略。
+ * 每条线上取「最右一个绿像素」相对「条的两端」的位置，两条线取平均；一条线也认不出条就返回 null。
+ */
+function readRowFill(raw: RawFrame, opts: SampleOptions, y: number): number | null {
+  const sx = raw.width / opts.refWidth
+  const sy = raw.height / opts.refHeight
+  const ratios: number[] = []
+  for (const rel of FILL_SCAN_LINES_REL) {
+    const py = Math.round((y + rel) * sy)
+    if (py < 0 || py >= raw.height) continue
+    let first = -1
+    let last = -1
+    let greenEnd = -1
+    for (let x = FILL_BAR_X0; x <= FILL_BAR_X1; x++) {
+      const px = Math.round(x * sx)
+      if (px < 0 || px >= raw.width) continue
+      const i = (py * raw.width + px) * 4
+      const r = raw.data[i]
+      const g = raw.data[i + 1]
+      const b = raw.data[i + 2]
+      const green = g >= 95 && g - r >= 50 && g - b >= 50 && r < 110
+      const gray = Math.abs(r - g) <= 10 && Math.abs(g - b) <= 10 && r >= 105 && r <= 165
+      if (green || gray) {
+        if (first < 0) first = x
+        last = x
+        if (green) greenEnd = x
+      }
+    }
+    // 条至少要占扫描范围的 6 成，否则这条线上根本不是进度条（比如行还没画完）。
+    if (first < 0 || last - first < (FILL_BAR_X1 - FILL_BAR_X0) * 0.6) continue
+    ratios.push(greenEnd < 0 ? 0 : (greenEnd - first + 1) / (last - first + 1))
+  }
+  if (ratios.length === 0) return null
+  const avg = ratios.reduce((a, b) => a + b, 0) / ratios.length
+  return Math.round(Math.min(1, Math.max(0, avg)) * 1000) / 1000
+}
+
 /** 读行内的目标坐标（best-effort：dig_card_coord 已齐全，但读不出仍要按 null 处理）。 */
 async function readRowCoord(
   digits: PreparedFrame,
@@ -623,7 +671,7 @@ export async function sampleTroopPanel(
   opts: SampleOptions
 ): Promise<PanelSample> {
   const warnings: string[] = []
-  const { ui, digits, noMarches } = await ensurePanelOpen(io, t, opts)
+  const { ui, digits, raw, noMarches } = await ensurePanelOpen(io, t, opts)
   const sampledAt = Date.now()
 
   if (noMarches) {
@@ -643,7 +691,8 @@ export async function sampleTroopPanel(
         targetCoord: null,
         troopCount: null,
         commanders: [],
-        resourceType: null
+        resourceType: null,
+        fillRatio: null
       })
     }
     return { sampledAt, queueUsed: 0, queueTotal: total, rows, warnings }
@@ -678,7 +727,8 @@ export async function sampleTroopPanel(
           targetCoord: null,
           troopCount: null,
           commanders: [],
-          resourceType: null
+          resourceType: null,
+          fillRatio: null
         })
         continue
       }
@@ -696,6 +746,7 @@ export async function sampleTroopPanel(
         troopCount: null,
         commanders: [],
         resourceType: await readRowResource(ui, t, y),
+        fillRatio: null,
         warning
       })
       continue
@@ -714,6 +765,9 @@ export async function sampleTroopPanel(
     // 资源类型：采集中的行左侧是资源点缩略图；行军中/返回中是部队图，识别不到就 null（由派兵记账补）。
     const resourceType = await readRowResource(ui, t, y)
 
+    // 载重进度条占比：只有采集中的行有这条（行军/返回态是深灰字压行底，没有进度条）。
+    const fillRatio = word.spec.onProgressBar ? readRowFill(raw, opts, y) : null
+
     rows.push({
       slot,
       status: word.spec.status,
@@ -723,6 +777,7 @@ export async function sampleTroopPanel(
       troopCount,
       commanders,
       resourceType,
+      fillRatio,
       warning: timer.warning
     })
   }

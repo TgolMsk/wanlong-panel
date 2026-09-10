@@ -110,6 +110,7 @@ export function toMarchState(
     travelTimeMs: null,
     travelTimeSource: 'fallback',
     resourceType: null,
+    fillRatio: null,
     sampledAt,
     warning: row.warning
   }
@@ -121,6 +122,7 @@ export function toMarchState(
   base.travelTimeSource = travel.source
   // 采集中的行按缩略图识别；行军中/返回中的行缩略图是部队图，只能靠派兵记账按坐标对上。
   base.resourceType = row.resourceType ?? travel.resourceType ?? null
+  base.fillRatio = row.fillRatio ?? null
 
   const endsAt = row.remainingMs == null ? null : sampledAt + row.remainingMs
   base.timerEndsAt = endsAt

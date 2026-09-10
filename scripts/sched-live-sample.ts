@@ -53,7 +53,7 @@ async function main(): Promise<void> {
   )
   for (const r of s.rows) {
     console.log(
-      `  #${r.slot} ${r.status.padEnd(14)} ${r.statusText} 倒计时=${r.remainingMs ?? '-'} 坐标=${r.targetCoord ?? '-'} 资源=${r.resourceType ?? '-'}`
+      `  #${r.slot} ${r.status.padEnd(14)} ${r.statusText} 倒计时=${r.remainingMs ?? '-'} 坐标=${r.targetCoord ?? '-'} 资源=${r.resourceType ?? '-'} 载重=${r.fillRatio == null ? '-' : `${Math.round(r.fillRatio * 100)}%`}`
     )
   }
   for (const w of s.warnings) console.log(`  ⚠ ${w}`)

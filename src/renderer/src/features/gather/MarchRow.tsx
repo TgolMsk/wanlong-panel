@@ -85,11 +85,6 @@ function MarchRowInner({ march, now, imminentMs, staleAfterMs }: MarchRowProps):
   // 只有真的是一串数字时才用大号等宽样式；「待校准」「倒计时不可用」这类中文说明用正常字号。
   const timerIsNumber = p.view.remainingMs != null && p.view.remainingMs > 0
 
-  const commanderText = march.commanders
-    .map((c) => (c.current == null || c.max == null ? null : `${c.current}/${c.max}`))
-    .filter((s): s is string => s !== null)
-    .join(' · ')
-
   return (
     <div className={rowClass}>
       {meta && resource ? (
@@ -115,11 +110,6 @@ function MarchRowInner({ march, now, imminentMs, staleAfterMs }: MarchRowProps):
           {march.troopCount != null && (
             <span className="wlg-row-badge">{march.troopCount.toLocaleString('zh-CN')} 兵</span>
           )}
-          {commanderText && (
-            <Tooltip title="本行指挥官的耐力。全部指挥官都低于配置的最低耐力时本轮不派兵。">
-              <span className="wlg-row-badge">耐力 {commanderText}</span>
-            </Tooltip>
-          )}
           {march.travelTimeSource === 'fallback' && march.status !== 'idle' && (
             <Tooltip title="单程行军耗时没有从「创建部队」页读到，用的是配置里的兜底估计，释放时刻只是估算值。">
               <span className="wlg-row-badge wlg-row-badge-warn">行军时长为估算</span>
@@ -135,6 +125,23 @@ function MarchRowInner({ march, now, imminentMs, staleAfterMs }: MarchRowProps):
               title={`距上次读「部队管理」面板已超过校准间隔 ${formatShort(p.staleForMs)}，倒计时可能有漂移，等下一次校准纠正。`}
             >
               <span className="wlg-row-badge wlg-row-badge-warn">待校准</span>
+            </Tooltip>
+          )}
+          {p.reason && (
+            // 说明文字收进一个小角标：悬停或点击才展开，别让整行被一段黄字撑高。
+            <Tooltip
+              title={`第 ${march.slot} 行：${p.reason}`}
+              trigger={['hover', 'click']}
+              styles={{ root: { maxWidth: 440 } }}
+            >
+              <span
+                className={`wlg-row-hint ${p.reasonLevel === 'error' ? 'wlg-row-hint-error' : 'wlg-row-hint-warn'}`}
+                role="button"
+                tabIndex={0}
+                aria-label="查看说明"
+              >
+                !
+              </span>
             </Tooltip>
           )}
         </div>
@@ -157,11 +164,6 @@ function MarchRowInner({ march, now, imminentMs, staleAfterMs }: MarchRowProps):
         )}
       </div>
 
-      {p.reason && (
-        <div className={`wlg-row-reason ${p.reasonLevel === 'error' ? '' : 'wlg-row-reason-warn'}`}>
-          第 {march.slot} 行：{p.reason}
-        </div>
-      )}
     </div>
   )
 }

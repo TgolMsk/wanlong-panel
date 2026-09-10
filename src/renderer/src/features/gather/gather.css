@@ -294,14 +294,30 @@
   font-family: var(--wl-font-sans);
 }
 
-.wlg-row-reason {
-  grid-column: 1 / -1;
-  font-size: var(--wl-fs-micro);
-  line-height: var(--wl-lh-body);
-  color: var(--wl-danger);
+/* 行内说明角标：一个小圆点，悬停/点击弹出完整说明（以前是整行黄字，太占地方） */
+.wlg-row-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: var(--wl-fw-semibold);
+  line-height: 1;
+  cursor: help;
+  flex: 0 0 auto;
+  user-select: none;
 }
-.wlg-row-reason-warn {
+.wlg-row-hint-warn {
   color: var(--wl-warning);
+  background: var(--wl-warning-soft);
+  border: 1px solid var(--wl-warning);
+}
+.wlg-row-hint-error {
+  color: var(--wl-danger);
+  background: var(--wl-danger-soft);
+  border: 1px solid var(--wl-danger);
 }
 
 /* ── 进度条 ───────────────────────────────────────────────────────────── */

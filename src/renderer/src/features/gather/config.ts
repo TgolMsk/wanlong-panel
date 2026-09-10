@@ -491,13 +491,6 @@ export function validateGatherConfig(cfg: GatherConfig): ConfigIssue[] {
     1,
     5
   )
-  if (cfg.queuePlan.minCommanderStamina < 0) {
-    issues.push({
-      level: 'error',
-      path: 'queuePlan.minCommanderStamina',
-      message: '指挥官最低耐力不能是负数。'
-    })
-  }
 
   // 搜索重试
   range(

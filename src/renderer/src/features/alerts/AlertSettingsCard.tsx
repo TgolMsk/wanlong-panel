@@ -570,7 +570,7 @@ export default function AlertSettingsCard(): React.JSX.Element {
             <Form.Item
               name="stalledMinutes"
               label="多久派不出队算「停摆」（分钟）"
-              extra="耐力不足 / 兵力不够 / 队列一直满。这是提醒，不会暂停任务，自动调度照常继续。"
+              extra="兵力不够 / 队列一直满 / 搜不到合格资源点。这是提醒，不会暂停任务，自动调度照常继续。"
             >
               <InputNumber
                 min={RANGE.stalledMinutes[0]}

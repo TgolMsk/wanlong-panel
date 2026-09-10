@@ -178,9 +178,9 @@ export const ALERT_SPECS = {
     pauses: false,
     notifyByDefault: true,
     summary:
-      '游戏本身是好的，但因为指挥官耐力不足、兵力不够、行军队列一直占满或搜不到合格资源点，' +
+      '游戏本身是好的，但因为兵力不够、行军队列一直占满或搜不到合格资源点，' +
       '已经很久没有成功派出过采集队。',
-    advice: '不影响面板运行，自动调度**照常继续**。要提高产出可以调低搜索下限、放宽储量要求或补充耐力。'
+    advice: '不影响面板运行，自动调度**照常继续**。要提高产出可以调低搜索下限或放宽储量要求。'
   },
   instanceResumed: {
     type: 'instanceResumed',

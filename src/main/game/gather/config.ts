@@ -92,7 +92,10 @@ export interface QueuePlan {
   maxConcurrentGather: number
   /** 用部队管理面板每行的坐标去重，避免两队派同一个点。 */
   avoidDuplicateTarget: boolean
-  /** 指挥官最低耐力。 */
+  /**
+   * @deprecated 已废弃（2026-09-10）：该游戏的指挥官耐力只用于打架，不影响采集，派兵不再据此拦截。
+   * 字段保留只为兼容旧配置文件，面板不再展示。
+   */
   minCommanderStamina: number
 }
 

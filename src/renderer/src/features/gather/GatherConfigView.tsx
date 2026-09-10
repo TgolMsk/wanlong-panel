@@ -333,7 +333,7 @@ export default function GatherConfigView(): React.JSX.Element {
           path="enabled"
           issues={issues}
           hint="打开后，调度器会按下面的策略自动搜点、派兵、记录 ETA 并在队列释放时再派。"
-          cost="打开就是真的会派兵消耗行军队列与指挥官耐力。先把下面的阈值配好再开。"
+          cost="打开就是真的会派兵占用行军队列。先把下面的阈值配好再开。"
         >
           <Switch
             checked={cfg.enabled}
@@ -774,7 +774,7 @@ export default function GatherConfigView(): React.JSX.Element {
       {/* ── 队列分配 ────────────────────────────────────────────────── */}
       <ConfigSection
         title="队列与派兵前置"
-        desc="派兵有两个硬前置：行军队列有空位（「部队管理」右上角的 N/M），指挥官耐力没耗尽。两个都满足才会真的派。"
+        desc="派兵的硬前置只有一个：行军队列有空位（「部队管理」右上角的 N/M）。指挥官耐力只用于打架，不影响采集，不做拦截。"
       >
         <ConfigField
           name="预留队列数"
@@ -822,21 +822,6 @@ export default function GatherConfigView(): React.JSX.Element {
           />
         </ConfigField>
 
-        <ConfigField
-          name="指挥官最低耐力"
-          path="queuePlan.minCommanderStamina"
-          issues={issues}
-          hint="读「部队管理」面板上的耐力（实测 105/105）。所有指挥官都低于这个值时本轮不派兵。"
-          cost="设得高会给别的玩法留耐力，但采集会更早停下来。"
-        >
-          <InputNumber
-            min={0}
-            value={cfg.queuePlan.minCommanderStamina}
-            onChange={(v) =>
-              patch((d) => ((d.queuePlan.minCommanderStamina = typeof v === 'number' ? v : 0), d))
-            }
-          />
-        </ConfigField>
       </ConfigSection>
 
       {/* ── 搜索重试 ────────────────────────────────────────────────── */}

@@ -266,8 +266,11 @@ async function checkRowRecognition(t: Awaited<ReturnType<typeof getTemplates>>, 
     timers?: Record<number, number>
     /** 行号 → 人眼核对过的坐标原文（坐标字形 0-9 补齐后的回归）。 */
     coords?: Record<number, string>
+    /** 行号 → 载重进度条绿色占比的区间 [lo, hi]（按 out/tmp/barscan 逐像素量过，不是肉眼估的）。 */
+    fills?: Record<number, [number, number]>
   }> = [
-    { file: 'panel_mana5.png', resources: ['mana', 'mana', 'mana', 'mana', 'mana'] },
+    { file: 'panel_mana5.png', resources: ['mana', 'mana', 'mana', 'mana', 'mana'], fills: { 1: [0, 0.1], 5: [0.65, 0.8] } },
+    { file: 'live_panel.png', resources: [], fills: { 2: [0, 0.06] } },
     { file: 'panel_gold_wood.png', resources: ['gold', 'wood', 'gold', 'wood', 'wood'] },
     { file: 'inst3_panel.png', resources: ['gold', null, null, null, null] },
     {
@@ -275,9 +278,11 @@ async function checkRowRecognition(t: Awaited<ReturnType<typeof getTemplates>>, 
       resources: ['wood', 'iron', 'gold', 'wood', 'wood'],
       coords: { 1: '674,627', 2: '678,628', 3: '686,628', 4: '671,634', 5: '679,618' }
     },
+    { file: 'panel_gold_wood.png', resources: [], fills: { 1: [0.6, 0.75] } },
+    { file: 'inst3_panel.png', resources: [], fills: { 1: [0.8, 1] } },
     { file: 'inst3_panel.png', resources: [], coords: { 1: '1231,717', 2: '1239,710' } },
     // 第 1 行「01:44:06」：绿色载重条边界正压在「44」上，二值化前读成「01:4:06」。
-    { file: 'troop-panel-5rows.png', resources: [], timers: { 1: (1 * 3600 + 44 * 60 + 6) * 1000 } }
+    { file: 'troop-panel-5rows.png', resources: [], timers: { 1: (1 * 3600 + 44 * 60 + 6) * 1000 }, fills: { 1: [0, 0.08] } }
   ]
   for (const c of cases) {
     if (!files.includes(c.file)) {
@@ -296,6 +301,11 @@ async function checkRowRecognition(t: Awaited<ReturnType<typeof getTemplates>>, 
     for (const [slot, want] of Object.entries(c.coords ?? {})) {
       const row = s.rows[Number(slot) - 1]
       ok(`${c.file} 第 ${slot} 行坐标 = ${want}`, row?.targetCoord === want, `读到 ${row?.targetCoord ?? 'null'}`)
+    }
+    for (const [slot, [lo, hi]] of Object.entries(c.fills ?? {})) {
+      const row = s.rows[Number(slot) - 1]
+      const v = row?.fillRatio
+      ok(`${c.file} 第 ${slot} 行载重占比 ∈ [${lo}, ${hi}]`, v != null && v >= lo && v <= hi, `读到 ${v == null ? 'null' : `${Math.round(v * 100)}%`}`)
     }
     for (const [slot, ms] of Object.entries(c.timers ?? {})) {
       const row = s.rows[Number(slot) - 1]

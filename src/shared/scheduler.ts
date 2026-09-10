@@ -98,6 +98,11 @@ export interface MarchState {
    * ② 行军中/返回中的行缩略图是部队图，只能靠派兵记账按坐标对上。都没有 = null（面板显示「?」）。
    */
   resourceType?: MarchResourceType | null
+  /**
+   * 采样时载重进度条的绿色占比（0~1）：游戏里这条随采集线性填满。
+   * 面板进度条用它做起点、按剩余时间线性外推到 1；读不到为 null（退回按时间估）。轻量读法，误差几个百分点。
+   */
+  fillRatio?: number | null
 
   sampledAt: number
   /** 识别不确定 / 数据缺失时的中文说明，面板标黄用。 */
@@ -273,6 +278,19 @@ export type SchedulerEventChannel = keyof SchedulerEvents
 
 // ── 纯函数：本地递推（主进程与渲染进程共用同一份，避免两边算出不同的秒数）─────
 
+/**
+ * 采集中的进度：采样时读到的载重占比作起点，按剩余时间线性外推到 1；没读到载重就退回
+ * 「自上次采样起过了多少」（这只是本次采样周期内的推进，不代表整趟的进度）。
+ */
+function fillProgress(m: MarchState, now: number): number | null {
+  const fill = m.fillRatio
+  if (fill == null || m.gatherDoneAt == null) return ratio(m.gatherDoneAt, m.sampledAt, now)
+  const f0 = Math.min(1, Math.max(0, fill))
+  const span = m.gatherDoneAt - m.sampledAt
+  const t = span <= 0 ? 1 : Math.min(1, Math.max(0, (now - m.sampledAt) / span))
+  return Math.min(1, f0 + (1 - f0) * t)
+}
+
 /** 按当前时刻把一支队伍换算成 UI 视图。不做任何 IO。 */
 export function deriveMarchView(m: MarchState, now: number = Date.now()): MarchView {
   if (m.status === 'idle') {
@@ -323,7 +341,7 @@ export function deriveMarchView(m: MarchState, now: number = Date.now()): MarchV
         phaseText: '采集中',
         remainingMs: m.gatherDoneAt - now,
         untilFreeMs: untilFree,
-        progress: ratio(m.gatherDoneAt, m.sampledAt, now)
+        progress: fillProgress(m, now)
       }
     }
     // 采集已完成 -> 本地直接切成「返回中」，不需要再开面板采样。

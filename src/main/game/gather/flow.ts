@@ -7,7 +7,7 @@
  *     saveState(r.state); scheduleWakeAt(r.nextWakeAt)
  *
  * 状态编号与 resources/game-data/gather-flow.json 一一对应：
- *   G0  确保在世界地图                G1  读部队管理面板（队列 N/M、各队 ETA、耐力）
+ *   G0  确保在世界地图                G1  读部队管理面板（队列 N/M、各队 ETA）
  *   G2  判定是否派兵（纯计算）        G3  打开搜索面板
  *   G4  选资源分类（对账式）          G5  探测等级上限
  *   G6  把滑杆调到搜索下限            G7  点搜索
@@ -52,7 +52,7 @@ import {
 } from './searchPanel'
 import { GatherHalt, GatherSession, type GatherIo, type GatherLogger } from './session'
 import { type GatherTemplates } from './templates'
-import { emptyTroopPanel, maxStamina, openTroopPanel, readTroopPanel } from './troopPanel'
+import { emptyTroopPanel, openTroopPanel, readTroopPanel } from './troopPanel'
 import {
   createRuntimeState,
   type DispatchRecord,
@@ -143,19 +143,7 @@ export async function runGatherCycle(opts: RunGatherCycleOptions): Promise<Gathe
     state.inFlight = toMarchRecords(panel, state, cfg)
     state.lastPanelSampledAt = panel.sampledAt
 
-    // ── G2：耐力硬前置 ─────────────────────────────────────────────────
-    const stamina = maxStamina(panel)
-    if (stamina !== null && stamina < cfg.queuePlan.minCommanderStamina) {
-      const at = now() + 30 * 60_000
-      return finish(
-        s, state, dispatched, panel, 'staminaLow',
-        `所有能读到的指挥官耐力都低于下限（最高 ${stamina} < ${cfg.queuePlan.minCommanderStamina}），本轮不派兵。`,
-        at, '30 分钟后再看耐力是否恢复。'
-      )
-    }
-    if (stamina === null && panel.rows.length > 0) {
-      s.warn('没读到任何指挥官耐力，本轮跳过耐力校验（不因识别失败而停派）。')
-    }
+    // （原 G2「耐力硬前置」已删除：2026-09-10 用户确认该游戏的指挥官耐力只用于打架，不影响采集。）
 
     // ── 主循环：能派几支派几支 ─────────────────────────────────────────
     for (;;) {
@@ -564,7 +552,7 @@ function pickResource(
 // ── 收尾 ──────────────────────────────────────────────────────────────────
 
 /**
- * 「还没走到主循环就该结束了」的早退出口（未启用 / 冷却中 / 熔断 / 耐力不足）。
+ * 「还没走到主循环就该结束了」的早退出口（未启用 / 冷却中 / 熔断）。
  * 这些情况的唤醒时刻是调用点算好的确定值，这里不再二次推算 —— 尤其是「未启用」必须保持 null，
  * 否则会给一个已经关掉的功能排上定时器。
  */

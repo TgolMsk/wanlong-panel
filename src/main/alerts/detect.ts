@@ -253,7 +253,7 @@ export class FailureTracker {
       at: now,
       reason:
         `已经 ${minutes} 分钟没有成功派出过采集队，最近一轮的结果是「${fact.message}」。` +
-        '常见原因是指挥官耐力不足、兵力不够、行军队列一直占满，或搜索下限太高找不到合格资源点。',
+        '常见原因是兵力不够、行军队列一直占满，或搜索下限太高找不到合格资源点。',
       shotPath: null,
       detail: { outcome: fact.outcome, 停滞分钟: minutes }
     })
