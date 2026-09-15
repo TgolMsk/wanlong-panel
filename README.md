@@ -22,19 +22,74 @@ MuMu 模拟器多实例控制面板 —— **截图 + 模板匹配**的多账号
 9. [常见问题](#9-常见问题)
 10. [其它文档](#10-其它文档)
 11. [机器人菜单 / 截图 / 资源统计 / 数据统计](#11-机器人菜单--截图--资源统计--数据统计)
+12. [AI 顾问：认不出界面时问视觉大模型 + 模板自学习](#12-ai-顾问认不出界面时问视觉大模型--模板自学习)
 
 ---
 
 ## 1. 安装
 
+支持三套环境，按平台自动选默认驱动（设置页可改）：
+
+| 平台 | 模拟器 | 管理 CLI | 状态 |
+|---|---|---|---|
+| **Windows 10/11** | **MuMu 模拟器 6.x**（新一代「MuMu模拟器」，MuMu 12 应该也行，未测） | `<MuMu 目录>\nx_main\MuMuManager.exe` | 2026-09-14 真机验证（6.6.4.0，Android 15） |
+| **Windows 10/11** | **雷电模拟器 14**（9 应该也行，未测） | `<雷电目录>\ldconsole.exe` | 2026-09-14 真机验证：`live:probe` 7/7、`live:panel` 读数全部正确 |
+| macOS（Apple Silicon） | MuMu Pro | `mumutool` | 工程最初的环境 |
+
+### 1.1 Windows + MuMu 模拟器（默认）
+
+前置条件：Node 22+、已安装 MuMu 模拟器并在多开器里建好实例。**实例分辨率必须是 2560×1440、DPI 360**
+（模板库全部截自这个尺寸；MuMu 里选「平板 2560×1440」或自定义都行，面板的实例列表与环境自检会把不一致的实例标出来）。
+
+```powershell
+npm ci               # npm 10 直接可用；npm 11 再执行 npm run approve
+npm run dev          # 起面板
+```
+
+面板启动时自动探测 MuMu 安装目录（卸载注册表 `HKLM\...\Uninstall\MuMuPlayer\InstallLocation`
+→ 常见目录 → 正在运行的 MuMu 进程），把 `MuMuManager.exe` 与 `adb.exe` 的路径写进 `settings.json`
+（都在 `<MuMu 目录>\nx_main\`，MuMu 12 是 `\shell\`）；探不到就到「设置」页手动选择，环境自检会告诉你缺什么。
+
+adb 端口不是公式，由 `MuMuManager info` 动态给出（实例 0 实测 16384，只在实例启动后才有），面板每次现读。
+实例配置**能读能写**：实例页「写入配置」支持 `resolution` / `cpu` / `memory` / `root` 等友好键，
+也可以直接写 MuMuManager 的原始键（如 `"performance_mode": "high"`）；写入后要重启实例才生效。
+新建实例默认填 `{"resolution": "2560,1440,360"}`；克隆出来的实例名是「<原名>-<序号>」。
+
+命令行验证：
+
+```powershell
+D:\tool\MuMuPlayer\nx_main\MuMuManager.exe info -v all          # JSON，按实例序号为键
+D:\tool\MuMuPlayer\nx_main\MuMuManager.exe control -v 0 launch  # 1.8 秒返回，约 8 秒后 is_android_started 变 true
+D:\tool\MuMuPlayer\nx_main\adb.exe connect 127.0.0.1:16384
+```
+
+### 1.2 Windows + 雷电模拟器
+
+雷电驱动完整保留，到「设置」页把模拟器改成「雷电模拟器」、把两个路径**清空后保存**即可
+（面板会按注册表 `HKCU\SOFTWARE\leidian\LDPlayer*` → 常见目录重新探测，自动换成 `ldconsole.exe` 与雷电自带的 `adb.exe`）。
+同样要求实例分辨率是自定义 2560×1440、DPI 360。
+
+雷电的 adb 端口是固定公式 **5555 + 2×实例序号**（序号 1 = `127.0.0.1:5557`），面板自动算，不用填。
+Hyper-V / 内核隔离开着也能跑（雷电 14 从 2026-03 起兼容）。
+
+★ **两家换来换去时注意两件事**：
+
+1. **实例序号的含义变了**。调度器记账、告警暂停、采集状态都按实例序号存，换之前把
+   `.wl-data/scheduler.json` 的 `instances`、`alerts-pauses.json`、`gather-state.json` 清掉，
+   再到「账号」页把账号重新绑到新的实例序号上，否则旧序号的状态会套到另一家模拟器的实例上。
+2. **两家的 adb 版本不同**（MuMu 是 36.0.0，雷电是 34.0.4），共用 5037 端口会互相杀 server。
+   换完先 `taskkill /F /IM adb.exe` 再起面板。
+
+### 1.3 macOS + MuMu Pro
+
 前置条件：macOS（Apple Silicon 已实测）、Node 22+、已安装并**至少启动过一次** MuMu Player。
 
 ```bash
 npm install
-npm run approve      # npm 11 的 install-scripts 白名单，首次必须批准（esbuild / sharp）
+npm run approve      # npm 11 的 install-scripts 白名单，首次必须批准（esbuild / sharp）；npm 10 会自动跳过
 ```
 
-`npm run approve` 是必须的：npm 11 默认不跑依赖的 postinstall，跳过它 esbuild 会缺二进制。
+`npm run approve` 在 npm 11 下是必须的：它默认不跑依赖的 postinstall，跳过它 esbuild 会缺二进制。
 
 Electron 的二进制**不是**靠 postinstall 下载的（electron@44 改成了首次 `require('electron')` 时懒下载）。
 如果起面板时报 `Electron failed to install correctly`，手动补一次：
@@ -54,6 +109,17 @@ mumutool /Applications/MuMuPlayer.app/Contents/MacOS/mumutool
 
 路径不对可以在面板的「设置」页改，或改 `src/shared/constants.ts` 里的默认值。
 
+### 1.4 命令行脚本怎么找模拟器
+
+`smoke` / `live:*` / `tplkit` 这些脚本不读面板的设置文件，按环境变量自己解析：
+`WL_EMULATOR=ldplayer|mumu`（**默认 mumu**，用雷电要显式设 `WL_EMULATOR=ldplayer`）、
+`WL_MUMU_DIR=<MuMu 目录>`、`WL_LDPLAYER_DIR=<雷电目录>`、`WL_EMULATOR_CLI`、`WL_ADB`、`WL_INSTANCE=<实例序号>`
+（多个实例在跑时指定用哪个，不指定取第一个运行中的）。PowerShell 里这样写：
+
+```powershell
+$env:WL_INSTANCE = '0'; npm run live:probe
+```
+
 ---
 
 ## 2. 起面板
@@ -66,14 +132,14 @@ npm run dev
 
 | 页签 | 干什么 |
 |---|---|
-| **实例管理** | 列出 MuMu 实例（序号 / 状态 / adb 端口 / serial），开关机、连接 adb、绑账号、看画面 |
+| **实例管理** | 列出模拟器实例（序号 / 状态 / adb 端口 / serial / 分辨率），开关机、连接 adb、绑账号、看画面 |
 | **执行监控** | 正在跑的脚本、实时日志、实时预览、暂停/停止 |
 | **采集总览** | 各实例的行军队列占用与在途队伍倒计时，自动调度开关（见第 6 节） |
 | **采集配置** | 《万龙觉醒》自动采集的逐项配置，按实例分开存（见第 6 节） |
 | **模板库** | 抓一帧 → 拉框 → 存模板（见第 4 节） |
 | **脚本** | 脚本列表、参数、校验、启动到指定实例 |
 | **账号** | 账号信息，绑到实例上，为多账号并发做准备 |
-| **设置** | adb/mumutool 路径、参考分辨率、降采样、阈值、并发上限、留痕策略、外观（亮/暗色） |
+| **设置** | 模拟器种类（MuMu / 雷电）、adb 与管理 CLI 路径、参考分辨率、降采样、阈值、并发上限、留痕策略、外观（亮/暗色） |
 
 面板默认是**暗色主题**（靛蓝 + 薄荷绿），右上角的小太阳可以切亮色，选择记在本机。
 面板还会记住你上次停留在哪一页。
@@ -86,6 +152,7 @@ npm run dev
 ```bash
 npm run typecheck    # tsc --noEmit（node + web 两套工程都查，含 scripts/）
 npm run build        # typecheck + electron-vite build
+npm run dist:win     # 打 Windows 安装包 + 免安装版（electron-builder --win --x64，未签名，SmartScreen 会提示一次）
 npm run dist:mac     # 打 dmg（electron-builder --mac --arm64）
 npm run format       # prettier
 ```
@@ -544,14 +611,35 @@ cat .wl-data/logs/<runId>.ndjson | jq -r '"\(.level)\t\(.stepId // "-")\t\(.mess
 → `node node_modules/electron/install.js`
 
 **面板里实例列表是空的**
-→ MuMu 没开，或 `mumutool` 路径不对。命令行验证：
+→ 雷电：`ldconsole.exe` 路径不对，或多开器里根本没有实例。命令行验证：
+`D:\leidian\LDPlayer14\ldconsole.exe list2`（每行 `序号,名称,...,宽,高,dpi`）。
+→ MuMu：MuMu 没开，或 `mumutool` 路径不对。命令行验证：
 `/Applications/MuMuPlayer.app/Contents/MacOS/mumutool info all`
+
+**实例列表里分辨率那一列标黄「不一致」**
+→ 实例不是 2560×1440，模板会整体错位。到雷电多开器 → 该实例设置 → 分辨率改成自定义 2560×1440、DPI 360，重启实例。
+也可以在面板里对该实例「更多 → 写入配置」填 `{"resolution": "2560,1440,360"}` 再重启。
+
+**Windows 上每隔几秒闪一个黑色命令行窗口**
+→ 某处 spawn 子进程没带 `windowsHide: true`。adb / ldconsole / reg 三处都已带上，新加的子进程照做。
 
 **点「连接」报设备未就绪**
 → 实例还在开机中。实例状态要是 `running` **且**画面已经显示出来才行。
 
+**模拟器刚开机、游戏还没打开，自动采集会自己把游戏拉起来吗？**
+→ 会。采集流程与调度器采样在「认不出当前界面」时，都会先查前台包名：
+不是游戏就用 monkey 把它拉起来，等到前台，再给足加载时间（冷启动实测 90 秒以上），
+然后接着开部队面板。**你只要开模拟器就行，游戏不用手动点。**
+
+只有两种情况仍需要人工：一是游戏拉起来后停在登录 / 公告 / 维护页（那不是自动化能替你做的决定），
+二是模拟器实例本身没开机 —— 面板不会替你开实例，因为那要占几个 GB 内存，得你自己决定开几台。
+
+★ 顺带一提：这个游戏用 `adb shell am start` **拉不起来**（会返回成功但进程起不来），
+必须走 `monkey`。自己写脚本拉游戏时别踩这个坑。
+
 **adb 报 `more than one device`**
-→ adb 会把实例的 5555 端口自动扫描成 `emulator-5554`，和 `127.0.0.1:16384` 是**同一台设备的两个 transport**。
+→ adb 会把实例的 adb 端口自动扫描成 `emulator-XXXX`（MuMu 是 `emulator-5554`，雷电实例 1 是 `emulator-5556`），
+和 `127.0.0.1:<端口>` 是**同一台设备的两个 transport**。
 面板内部所有 adb 调用都强制带 `-s 127.0.0.1:<adb_port>`，不受影响；
 你自己在命令行敲 adb 时记得也带 `-s`。
 
@@ -698,3 +786,59 @@ npm run check:resources    # 93 项：金额解析 / 布局与 json 一致 / 模
 
 真机上还没验过的（要在调度空窗做）：`exclusive` 与采样 / 派遣抢锁的实际表现、机器人截图的 JPEG 大小、
 「💰 资源」在真机上的导航 / 淡入动画 / 还原，以及城内 HUD 的「道具」按钮位置是否与世界地图一致。
+
+---
+
+## 12. AI 顾问：认不出界面时问视觉大模型 + 模板自学习
+
+采集流程与调度器都有一条「模板全不命中、认不出当前界面」的分支，以前只能盲按 BACK 试探，六次不行就暂停实例。
+最常见的元凶是**活动弹窗**（带「前往」和右上角 ×），而它的 × 模板一直缺着 —— 弹窗不可复现，没法提前裁。
+
+AI 顾问把这一格交给视觉大模型（任何 **OpenAI 兼容接口 + 支持图片输入**的模型），在「盲按 BACK 之前」插一次：
+
+1. 把当前截图缩到 1280 宽发过去，让模型**分类界面**并从**动作白名单**里选一个：点关闭按钮 / 点「取消」/ 按返回 / 不动。
+2. 只有前两种会被执行：坐标由模型给边界框，默认再做一次「局部放大精定位」；「按返回」「不动」交回原来的兜底阶梯
+   （BACK 之后必须取消退出框这条安全逻辑只写在一处）。「确定」「派兵」「购买」永远不在白名单里。
+3. 点完必须复验：画面没变就当没发生；画面变了但仍认不出，只算「已执行」，继续判断。
+4. ★ **自学习**：点掉弹窗后回到了已知界面（世界地图 / 城内 / 面板…），就把点击前那一帧里的关闭按钮裁成模板
+   存进模板库（第一张就是采集流程一直缺的 `tpl_btn_close_popup`，之后是 `_ai2`、`_ai3` … 最多 8 张）。
+   下次同样的弹窗 1 毫秒本地解决，不再问 AI。裁模板走正式的视觉层，方差守卫、去重（已有模板能认出就不再学）都在。
+
+### 12.1 配置
+
+设置页「AI 顾问」卡：
+
+| 项 | 说明 |
+|---|---|
+| 接口地址 | 填到 `/v1` 这一层，面板自己拼 `/chat/completions`。阿里云百炼：`https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| API Key | 凭据。只存 `<dataDir>/ai.json`，界面只显示后 4 位，不进日志、不进错误信息、不过 IPC 桥。留空 = 不修改 |
+| 模型名 | 必须支持图片输入。百炼的 `qwen3.8-flash` 是多模态模型（图 / 视频都收），也可用 `qwen3-vl-plus`、`qwen3-vl-flash` |
+| 测试连接与视觉能力 | 发一张合成图（大红字母 W）问「最大的字母是什么」：认出 W ⇒ 支持图片；答非所问 ⇒ 判「不支持图片」；400 提到 image ⇒ 纯文本模型 |
+| 每小时最多问几次 / 同实例冷却 | 识别出错时流程可能反复认不出界面，这两道闸防止烧钱。默认 20 次 / 20 秒 |
+| 最低置信度 | 模型自报置信度低于它的建议不执行，默认 0.5 |
+| 局部放大精定位 / 自学模板 | 默认都开 |
+
+正常挂机一天可能一次都不触发；每次一张 1280 宽的 JPEG，几分钱、3~15 秒。**截图里有你的账号、服务器、联盟信息，会发到你填的接口。**
+
+### 12.2 它在哪里介入
+
+- 采集流程 G0（`src/main/game/gather/navigation.ts` 的 `ensureWorldMap`）：找不到 × 模板之后、盲按 BACK 之前。
+- 调度器采样（`src/main/scheduler/troopPanel.ts` 的 `ensurePanelOpen`）：顶号探针没命中之后、点 × / 按 BACK 之前。
+  AI 处理成功时采样器收到 `'recovered'`，重新截图再判，不按 BACK。
+
+两条链路都按「`tpl_btn_close_popup` 或以它为前缀」扫描关闭按钮模板，AI 自学的变体不用改代码就能用上。
+
+### 12.3 落盘与自检
+
+```
+<dataDir>/ai.json          配置（★ 含明文 API Key）+ 最近 50 条问询记录（结果 / 建议 / 裁了哪张模板）
+```
+
+```bash
+npm run check:ai           # 76 项离线断言：配置三态 / 请求形状 / 8 类失败话术 / ★ Key 泄露实测 / 视觉探测判定 /
+                           #   回复解析 / 限频冷却 / ★ 端到端：合成弹窗帧 → 假 AI 给框（两阶段）→ 点击落点 → 复验 →
+                           #   自学出模板 → 正式视觉层 loadPrepared+matchIn 在原帧重新命中 → 第二次不重复学
+```
+
+真机上还没验过的：真实活动弹窗上模型给框的精度、不同弹窗 × 的模板泛化程度。第一次真实触发时到设置页「最近问询」看记录，
+学错了就到「模板」页删掉那张 `tpl_btn_close_popup*`。

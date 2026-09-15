@@ -13,14 +13,31 @@ import {
   REF_HEIGHT,
   REF_WIDTH
 } from './constants'
-import type { AppSettings } from './domain'
+import type { AppSettings, EmulatorKind } from './domain'
 import type { ScriptDef } from './script'
 
-/** dataDir 由主进程填（app.getPath('userData') 或 <工程根>/.wl-data），这里给空串占位。 */
-export function defaultSettings(dataDir = ''): AppSettings {
+/**
+ * 默认驱动：**两个平台都是 MuMu**（Windows = MuMuManager.exe，macOS = mumutool）。
+ * 雷电（ldplayer）仍然完整支持，但要用户到「设置」页显式选。
+ * 渲染进程没有 process，要把 window.api.env.platform 传进来（只影响路径占位）。
+ */
+export function defaultEmulatorKind(_platform: string): EmulatorKind {
+  return 'mumu'
+}
+
+/**
+ * dataDir 由主进程填（app.getPath('userData') 或 <工程根>/.wl-data），这里给空串占位。
+ * 路径默认值：
+ *   · macOS + mumu -> MuMu Pro 的固定安装路径（那台机器上装哪儿是定死的）
+ *   · Windows      -> 一律留空，表示「待主进程按注册表 / 常见目录探测后回填」（src/main/config.ts）
+ */
+export function defaultSettings(dataDir = '', platform = ''): AppSettings {
+  const emulator = defaultEmulatorKind(platform)
+  const mac = emulator === 'mumu' && platform !== 'win32'
   return {
-    adbPath: DEFAULT_ADB_PATH,
-    mumutoolPath: DEFAULT_MUMUTOOL_PATH,
+    emulator,
+    adbPath: mac ? DEFAULT_ADB_PATH : '',
+    mumutoolPath: mac ? DEFAULT_MUMUTOOL_PATH : '',
     dataDir,
     refWidth: REF_WIDTH,
     refHeight: REF_HEIGHT,

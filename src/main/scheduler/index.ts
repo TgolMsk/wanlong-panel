@@ -39,6 +39,7 @@ import type {
 import { SCHED_CH, defaultSchedulerConfig } from '@shared/scheduler'
 import type { RawFrame } from '@shared/vision'
 
+import { ensureGameForeground, type GamePresence } from '@main/game/launch'
 import { emitScheduler, handleScheduler, resetSchedulerIpc } from './ipc'
 import {
   applySample,
@@ -61,10 +62,16 @@ export interface SchedulerAdbPort {
   capture(serial: string): Promise<RawFrame>
   tap(serial: string, x: number, y: number): Promise<void>
   key(serial: string, k: AndroidKey): Promise<void>
-  /** 前台包名（健康探针用，可选）。 */
+  /** 前台包名（健康探针 + 冷启动恢复用，可选）。 */
   foregroundPackage?(serial: string): Promise<string | null>
-  /** 某包的进程是否还活着（健康探针用，可选）。 */
+  /** 某包的进程是否还活着（健康探针 + 冷启动恢复用，可选）。 */
   isRunning?(serial: string, pkg: string): Promise<boolean>
+  /**
+   * 拉起游戏（冷启动恢复用，可选）。
+   * ★ 实现**必须**是 monkey：`am start` 对《万龙觉醒》返回成功但进程起不来（adb/apps.ts 有实测记录）。
+   * 不接这个能力时，「模拟器刚开机、游戏没跑」就只能靠人工恢复。
+   */
+  launchApp?(serial: string, pkg: string): Promise<void>
 }
 
 export interface SchedulerDeps {
@@ -98,7 +105,7 @@ export interface SchedulerDeps {
    * 返回 true = 探针命中并已接管（告警中心暂停实例），采样器就不再按 BACK 试探。
    * 在实例锁内被调用：实现方只能做识别 + 抛告警，**不得** await 调度器自己的方法。
    */
-  onUnrecognizedFrame?(instanceIndex: number, raw: RawFrame): Promise<boolean | void>
+  onUnrecognizedFrame?(instanceIndex: number, raw: RawFrame): Promise<boolean | 'recovered' | void>
   /**
    * 健康探针：到点截一帧（不开面板）交给上层，附带前台包名与游戏进程存活情况。
    * 同样在实例锁内，同样不得 await 调度器方法。
@@ -351,7 +358,10 @@ class SchedulerImpl {
       resourceType?: MarchResourceType | null
     }
   ): Promise<void> {
-    if (info.travelTimeMs != null && (!Number.isFinite(info.travelTimeMs) || info.travelTimeMs < 0)) {
+    if (
+      info.travelTimeMs != null &&
+      (!Number.isFinite(info.travelTimeMs) || info.travelTimeMs < 0)
+    ) {
       throw new AppError(
         'INVALID_ARGUMENT',
         `派兵记账收到非法的行军耗时：${String(info.travelTimeMs)}（毫秒）。`,
@@ -360,7 +370,8 @@ class SchedulerImpl {
     }
     const rt = this.rt(instanceIndex)
     const travelTimeMs = info.travelTimeMs ?? this.config.defaultTravelSeconds * 1000
-    const source: TravelTimeSource = info.travelTimeMs == null ? 'fallback' : (info.source ?? 'dispatch')
+    const source: TravelTimeSource =
+      info.travelTimeMs == null ? 'fallback' : (info.source ?? 'dispatch')
     rt.travelHints.unshift({
       travelTimeMs,
       source,
@@ -502,7 +513,10 @@ class SchedulerImpl {
         log: (level, message) => this.log(level, `[实例 ${instanceIndex}] ${message}`),
         onUnrecognized: deps.onUnrecognizedFrame
           ? (raw) => deps.onUnrecognizedFrame!(instanceIndex, raw)
-          : undefined
+          : undefined,
+        // 冷启动恢复：模拟器刚开机 / 游戏被杀时，采样器靠它把游戏拉起来再继续。
+        // 三样能力（前台包名 / 拉起 / 游戏包名）缺一就不接，采样器会退回原来的兜底阶梯。
+        ensureGameForeground: this.buildEnsureGameForeground(instanceIndex, dev.serial)
       }
 
       this.log('info', `实例 ${instanceIndex} 开始读部队管理面板（${reason}）。`)
@@ -547,6 +561,32 @@ class SchedulerImpl {
   }
 
   // ── 排期与唤醒 ─────────────────────────────────────────────────────────
+
+  /**
+   * 拼出采样器要的「冷启动恢复」能力：确认游戏在前台，不在就用 monkey 拉起来。
+   * 能力不全（没接 foregroundPackage / launchApp / gamePackage）就返回 undefined，
+   * 采样器会退回原来的「等一等 / 点弹窗 × / 按 BACK」阶梯。
+   */
+  private buildEnsureGameForeground(
+    instanceIndex: number,
+    serial: string
+  ): (() => Promise<GamePresence>) | undefined {
+    const deps = this.deps
+    if (!deps) return undefined
+    const { foregroundPackage, launchApp, isRunning } = deps.adb
+    const pkg = deps.gamePackage?.()
+    if (!foregroundPackage || !launchApp || !pkg) return undefined
+    return () =>
+      ensureGameForeground(
+        {
+          foreground: () => foregroundPackage(serial),
+          launch: () => launchApp(serial, pkg),
+          isRunning: isRunning ? () => isRunning(serial, pkg) : undefined,
+          log: (level, message) => this.log(level, `[实例 ${instanceIndex}] ${message}`)
+        },
+        { packageName: pkg }
+      )
+  }
 
   /** 按当前状态重排唤醒。backoffStep 传了就走退避，不传则按 ETA 正常排。 */
   private rearm(instanceIndex: number, why: string, backoffStep?: number): void {
@@ -704,7 +744,10 @@ class SchedulerImpl {
     try {
       hook(instanceIndex, enabled, Date.now())
     } catch (e) {
-      this.log('warn', `实例 ${instanceIndex} 的自动调度开关通报回调抛错（已忽略）：${AppError.from(e).message}`)
+      this.log(
+        'warn',
+        `实例 ${instanceIndex} 的自动调度开关通报回调抛错（已忽略）：${AppError.from(e).message}`
+      )
     }
   }
 
@@ -712,11 +755,17 @@ class SchedulerImpl {
    * 把「上次在外、这次不见了」的队伍报给统计模块。★ 它坏掉绝不能连累调度（与 notifySampleResult 同一写法）。
    * 只比对目标坐标：上次 status!=='idle' 且有坐标、本次面板里没有相同坐标的行。
    */
-  private notifyMarchGone(instanceIndex: number, prev: InstanceQueueState, sample: PanelSample): void {
+  private notifyMarchGone(
+    instanceIndex: number,
+    prev: InstanceQueueState,
+    sample: PanelSample
+  ): void {
     const hook = this.deps?.onMarchGone
     if (!hook) return
     const stillThere = new Set(
-      sample.rows.map((r) => r.targetCoord).filter((c): c is string => typeof c === 'string' && c !== '')
+      sample.rows
+        .map((r) => r.targetCoord)
+        .filter((c): c is string => typeof c === 'string' && c !== '')
     )
     const gone = prev.marches
       .filter((m) => m.status !== 'idle' && m.targetCoord && !stillThere.has(m.targetCoord))

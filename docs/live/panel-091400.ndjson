@@ -1,0 +1,18 @@
+{"at":1789391640397,"level":"info","message":"模拟器驱动 mumu，CLI=D:\\tool\\MuMuPlayer\\nx_main\\MuMuManager.exe，adb=D:\\tool\\MuMuPlayer\\nx_main\\adb.exe（MuMu 安装目录 D:\\tool\\MuMuPlayer（卸载注册表））"}
+{"at":1789391641003,"level":"info","message":"已连接实例 index=0「已登录」serial=127.0.0.1:16384，screencap 实测 2560x1440，前台=com.lilithgames.samo.android.cn"}
+{"at":1789391641676,"level":"warn","message":"模板：以下可选模板缺失，相关判据会降级（不影响主流程）：tpl_alliance_own"}
+{"at":1789391641676,"level":"info","message":"模板集 tset_mtugr5sx0iwc：界面模板 60 张，字形集 8 套，缺 1 张：tpl_alliance_own"}
+{"at":1789391643401,"level":"debug","message":"读到「行军队列 N/M」= 5/5","data":{"field":"行军队列 N/M","text":"5/5","minScore":0.9385}}
+{"at":1789391643420,"level":"debug","message":"读到「第 1 行倒计时」= 01:53:37","data":{"field":"第 1 行倒计时","text":"01:53:37","minScore":0.9118}}
+{"at":1789391643425,"level":"debug","message":"读到「第 1 行目标坐标」= 603,535","data":{"field":"第 1 行目标坐标","text":"603,535","minScore":0.915}}
+{"at":1789391643426,"level":"debug","message":"读到「第 1 行指挥官耐力」= 105/105","data":{"field":"第 1 行指挥官耐力","text":"105/105","minScore":0.9465}}
+{"at":1789391643442,"level":"debug","message":"读到「第 2 行倒计时」= 01:25:43","data":{"field":"第 2 行倒计时","text":"01:25:43","minScore":0.9109}}
+{"at":1789391643446,"level":"debug","message":"读到「第 2 行目标坐标」= 607,533","data":{"field":"第 2 行目标坐标","text":"607,533","minScore":0.9283}}
+{"at":1789391643463,"level":"debug","message":"读到「第 3 行倒计时」= 01:20:24","data":{"field":"第 3 行倒计时","text":"01:20:24","minScore":0.9106}}
+{"at":1789391643467,"level":"debug","message":"读到「第 3 行目标坐标」= 621,536","data":{"field":"第 3 行目标坐标","text":"621,536","minScore":0.9376}}
+{"at":1789391643484,"level":"debug","message":"读到「第 4 行倒计时」= 01:20:23","data":{"field":"第 4 行倒计时","text":"01:20:23","minScore":0.9132}}
+{"at":1789391643486,"level":"debug","message":"读到「第 4 行目标坐标」= 611,534","data":{"field":"第 4 行目标坐标","text":"611,534","minScore":0.9431}}
+{"at":1789391643507,"level":"debug","message":"读到「第 5 行目标坐标」= 613,536","data":{"field":"第 5 行目标坐标","text":"613,536","minScore":0.9287}}
+{"at":1789391643502,"level":"debug","message":"读到「第 5 行倒计时」= 00:24:10","data":{"field":"第 5 行倒计时","text":"00:24:10","minScore":0.8431}}
+{"at":1789391643510,"level":"debug","message":"读到「第 5 行指挥官耐力」= 105/105","data":{"field":"第 5 行指挥官耐力","text":"105/105","minScore":0.9107}}
+{"at":1789391643510,"level":"info","message":"部队管理：队列 5/5，解析出 5 行。","data":{"queueUsed":5,"queueTotal":5,"rows":[{"index":1,"status":"gathering","remainingSec":6817,"coord":"603,535"},{"index":2,"status":"gathering","remainingSec":5143,"coord":"607,533"},{"index":3,"status":"gathering","remainingSec":4824,"coord":"621,536"},{"index":4,"status":"gathering","remainingSec":4823,"coord":"611,534"},{"index":5,"status":"gathering","remainingSec":1450,"coord":"613,536"}]}}

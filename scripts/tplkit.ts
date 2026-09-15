@@ -25,6 +25,7 @@ import { REF_HEIGHT, REF_WIDTH } from '@shared/constants'
 import type { Rect } from '@shared/vision'
 
 import { attach, captureRaw, initAdb } from '@main/adb/index'
+import { bootstrapEmulatorForScripts, listInstances } from '@main/mumu/index'
 import {
   buildDiffAlpha,
   createSet,
@@ -66,8 +67,20 @@ async function ensureDir(file: string): Promise<void> {
 
 /** 抓一帧并存 PNG；同时存一张 1280 宽的 JPG 供人眼查看。 */
 async function cmdCap(name: string): Promise<void> {
-  await initAdb({})
-  const dev = await attach(0, 16384)
+  // 驱动与 adb 路径按平台解析；实例用 WL_INSTANCE=<index> 指定，不指定取第一个 running 的。
+  const env = await bootstrapEmulatorForScripts()
+  await initAdb({ adbPath: env.adbPath })
+  const wanted = (process.env['WL_INSTANCE'] ?? '').trim()
+  const instances = await listInstances()
+  const target = wanted
+    ? instances.find((i) => i.index === Number(wanted))
+    : instances.find((i) => i.state === 'running' && i.adbPort !== null)
+  if (!target || target.adbPort === null) {
+    throw new Error(
+      `没有可用的 running 实例${wanted ? `（WL_INSTANCE=${wanted}）` : ''}，无法抓帧。`
+    )
+  }
+  const dev = await attach(target.index, target.adbPort)
   const raw = await captureRaw(dev.serial, { throttle: false })
   const bytes = raw.width * raw.height * 4
   const png = await sharp(Buffer.from(raw.data.buffer, raw.data.byteOffset, bytes), {
@@ -161,7 +174,11 @@ async function cmdAnalyze(
     for (let i = 0; i < w; i++) {
       const v = g.gray[j * w + i]!
       const fg =
-        polarity === 'light' ? v - bg > THR : polarity === 'dark' ? bg - v > THR : Math.abs(v - bg) > THR
+        polarity === 'light'
+          ? v - bg > THR
+          : polarity === 'dark'
+            ? bg - v > THR
+            : Math.abs(v - bg) > THR
       if (fg) {
         colCount[i]!++
         rowCount[j]!++
@@ -207,9 +224,7 @@ async function cmdAnalyze(
         stdFull: Number(full.toFixed(1)),
         stdShrink2: Number(stdShrunk.toFixed(1)),
         tight:
-          maxX < 0
-            ? null
-            : { x: x + minX, y: y + minY, w: maxX - minX + 1, h: maxY - minY + 1 },
+          maxX < 0 ? null : { x: x + minX, y: y + minY, w: maxX - minX + 1, h: maxY - minY + 1 },
         colSegs: segs.map((s) => ({ x: x + s.x0, w: s.x1 - s.x0 + 1 })),
         rowFirstLast: maxY < 0 ? null : [y + minY, y + maxY]
       },
@@ -317,7 +332,11 @@ async function cmdGlyphs(
   edge.sort((a, b) => a - b)
   const bg = edge[Math.floor(edge.length / 2)]!
   const isFg = (v: number): boolean =>
-    polarity === 'light' ? v - bg > thr : polarity === 'dark' ? bg - v > thr : Math.abs(v - bg) > thr
+    polarity === 'light'
+      ? v - bg > thr
+      : polarity === 'dark'
+        ? bg - v > thr
+        : Math.abs(v - bg) > thr
 
   const colCount = new Array<number>(w).fill(0)
   let minY = h
@@ -416,7 +435,10 @@ async function cmdAlpha(
     { x, y, w, h },
     { tolerance: tol }
   )
-  const crop = await sharp(bufs[0]!).extract({ left: x, top: y, width: w, height: h }).png().toBuffer()
+  const crop = await sharp(bufs[0]!)
+    .extract({ left: x, top: y, width: w, height: h })
+    .png()
+    .toBuffer()
   const { applyAlpha } = await import('@vision/index')
   const rgba = await applyAlpha(new Uint8Array(crop), new Uint8Array(r.alphaPng))
   await ensureDir(out)
@@ -425,7 +447,15 @@ async function cmdAlpha(
     .resize({ width: Math.min(1200, w * 4), kernel: 'nearest' })
     .png()
     .toFile(out)
-  console.log(JSON.stringify({ ok: true, out, coverage: Number(r.coverage.toFixed(3)), tol, frames: frames.length }))
+  console.log(
+    JSON.stringify({
+      ok: true,
+      out,
+      coverage: Number(r.coverage.toFixed(3)),
+      tol,
+      frames: frames.length
+    })
+  )
 }
 
 /** 批量存模板。JSON 是 SaveJob[]。 */
@@ -553,7 +583,14 @@ async function cmdVerify(jobFile: string): Promise<void> {
       std: tpl.std,
       masked: tpl.maskCoverage ?? null,
       size: [tpl.refW, tpl.refH],
-      pos: { found: hit.found, score: hit.score, at: [hit.x, hit.y], center: [hit.centerX, hit.centerY], dx, dy },
+      pos: {
+        found: hit.found,
+        score: hit.score,
+        at: [hit.x, hit.y],
+        center: [hit.centerX, hit.centerY],
+        dx,
+        dy
+      },
       neg: negs
     })
   }
@@ -616,7 +653,11 @@ async function cmdOcr(
   edge.sort((a, b) => a - b)
   const bg = edge[Math.floor(edge.length / 2)]!
   const isFg = (v: number): boolean =>
-    polarity === 'light' ? v - bg > thr : polarity === 'dark' ? bg - v > thr : Math.abs(v - bg) > thr
+    polarity === 'light'
+      ? v - bg > thr
+      : polarity === 'dark'
+        ? bg - v > thr
+        : Math.abs(v - bg) > thr
   const colCount = new Array<number>(w).fill(0)
   for (let j = 0; j < h; j++)
     for (let i = 0; i < w; i++) if (isFg(g.gray[j * w + i]!)) colCount[i]!++
@@ -659,12 +700,27 @@ async function cmdOcr(
     const ch = best.id.slice(setPrefix.length + 1).replace(/^d/, '')
     const c = ch === 'colon' ? ':' : ch === 'slash' ? '/' : ch === 'comma' ? ',' : ch
     got.push(c)
-    detail.push({ at: x + s.x0, w: s.x1 - s.x0 + 1, pick: c, score: Number(best.score.toFixed(4)), margin: Number((best.score - second).toFixed(4)) })
+    detail.push({
+      at: x + s.x0,
+      w: s.x1 - s.x0 + 1,
+      pick: c,
+      score: Number(best.score.toFixed(4)),
+      margin: Number((best.score - second).toFixed(4))
+    })
   }
   const text = got.join('')
   console.log(
     JSON.stringify(
-      { setPrefix, frame: framePng.split('/').pop(), expect, got: text, ok: text === expect, segs: segs.length, wanted: want.length, detail },
+      {
+        setPrefix,
+        frame: framePng.split('/').pop(),
+        expect,
+        got: text,
+        ok: text === expect,
+        segs: segs.length,
+        wanted: want.length,
+        detail
+      },
       null,
       1
     )
@@ -708,13 +764,16 @@ async function cmdScan(framesDir: string, prefix: string): Promise<void> {
   for (const n of names) frames.set(n, await preparedFromPng(join(framesDir, n)))
 
   const rows: unknown[] = []
-  for (const t of [...tpls.values()].filter((t) => t.id.startsWith(prefix)).sort((a, b) => a.id.localeCompare(b.id))) {
+  for (const t of [...tpls.values()]
+    .filter((t) => t.id.startsWith(prefix))
+    .sort((a, b) => a.id.localeCompare(b.id))) {
     const roi = byId.get(t.id)?.defaultRoi
     const hits: Array<{ f: string; s: number; at: [number, number] }> = []
     let maxMiss = 0
     for (const [n, f] of frames) {
       const m = await matchIn(f, t, { roi })
-      if (m.found) hits.push({ f: n.replace('.png', ''), s: Number(m.score.toFixed(3)), at: [m.x, m.y] })
+      if (m.found)
+        hits.push({ f: n.replace('.png', ''), s: Number(m.score.toFixed(3)), at: [m.x, m.y] })
       else if (m.score > maxMiss) maxMiss = m.score
     }
     rows.push({
@@ -742,7 +801,21 @@ async function cmdDel(prefix: string): Promise<void> {
 async function cmdList(): Promise<void> {
   const setId = await resolveSet()
   const all = await listTemplates(setId)
-  console.log(JSON.stringify(all.map((t) => ({ id: t.id, name: t.name, std: t.std, bounds: t.bounds, roi: t.defaultRoi, tags: t.tags, note: t.note })), null, 1))
+  console.log(
+    JSON.stringify(
+      all.map((t) => ({
+        id: t.id,
+        name: t.name,
+        std: t.std,
+        bounds: t.bounds,
+        roi: t.defaultRoi,
+        tags: t.tags,
+        note: t.note
+      })),
+      null,
+      1
+    )
+  )
 }
 
 async function main(): Promise<void> {
@@ -838,7 +911,9 @@ async function main(): Promise<void> {
       await cmdCross(argv[1]!)
       break
     default:
-      console.error('用法：tplkit cap|view|analyze|probe|alpha|glyphs|save|verify|cross|find|ls|del ...')
+      console.error(
+        '用法：tplkit cap|view|analyze|probe|alpha|glyphs|save|verify|cross|find|ls|del ...'
+      )
       process.exitCode = 1
   }
 }

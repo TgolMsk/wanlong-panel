@@ -121,7 +121,12 @@ export async function foregroundPackage(serial: string): Promise<string | null> 
     if (hit) return hit[1]!
 
     // 兜底：部分场景 mCurrentFocus 是 null（例如刚亮屏），改看 mResumedActivity。
-    const b = await shellRaw(serial, 'dumpsys activity activities | grep -m1 mResumedActivity')
+    // ★ Android 14（雷电 14）的 dumpsys 里已经没有 mResumedActivity 这一行了，只有 topResumedActivity，
+    //   两个都匹配；主路径 mCurrentFocus 在 Android 12 / 14 上都实测可用。
+    const b = await shellRaw(
+      serial,
+      'dumpsys activity activities | grep -m1 -E "mResumedActivity|topResumedActivity"'
+    )
     const hit2 = FOCUS_RE.exec(b.text)
     return hit2 ? hit2[1]! : null
   })

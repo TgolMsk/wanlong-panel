@@ -21,6 +21,8 @@ import {
   tap as adbTap,
   tapMany as adbTapMany
 } from '@main/adb/index'
+import { isRunning, launchViaMonkey } from '@main/adb/apps'
+import { ensureGameForeground, type GamePresence } from '../launch'
 import type { GatherIo } from './session'
 
 export interface AdbGatherIoOptions {
@@ -83,6 +85,22 @@ export class AdbGatherIo implements GatherIo {
 
   async launchApp(packageName: string, cold = false): Promise<void> {
     await launch(this.serial, packageName, cold)
+  }
+
+  /**
+   * 冷启动恢复：确认游戏在前台，不在就用 **monkey** 拉起并等到它到前台。
+   * ★ 不能用上面的 launchApp（`am start`）：对《万龙觉醒》它返回成功但进程起不来，
+   *   模拟器刚开机时老写法会白等一分钟然后判失败。
+   */
+  async ensureGameForeground(packageName: string): Promise<GamePresence> {
+    return ensureGameForeground(
+      {
+        foreground: () => foregroundPackage(this.serial),
+        launch: () => launchViaMonkey(this.serial, packageName),
+        isRunning: () => isRunning(this.serial, packageName)
+      },
+      { packageName }
+    )
   }
 
   async stopApp(packageName: string): Promise<void> {

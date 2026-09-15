@@ -20,7 +20,30 @@ import { INSTANCE_DISK_COST_BYTES, serialOf } from '@shared/constants'
 import type { CreateInstanceOptions, MumuInstance, MumuInstanceRaw } from '@shared/domain'
 import { AppError } from '@shared/errors'
 import { mumuInfoReturnSchema, mumuInstanceRawSchema, parseOrThrow } from '@shared/schemas'
-import { mumuExec } from './cli'
+import { getMumuCliOptions, mumuExec, setMumuCliOptions } from './cli'
+import type { EmulatorDriver } from './driver'
+
+/**
+ * 把本文件的函数包成 driver.ts 的 EmulatorDriver（MuMu / macOS 驱动）。
+ * 函数本身原样保留，仍可单独 import（脚本与旧调用方不受影响）。
+ */
+export function createMumuDriver(): EmulatorDriver {
+  return {
+    kind: 'mumu',
+    label: 'MuMu 模拟器',
+    setCliPath: (p) => setMumuCliOptions({ mumutoolPath: p }),
+    getCliPath: () => getMumuCliOptions().mumutoolPath,
+    list: listMumuInstances,
+    open: openInstance,
+    close: closeInstance,
+    restart: restartInstance,
+    create: createInstances,
+    clone: cloneInstance,
+    remove: deleteInstance,
+    config: configInstance,
+    waitReady: waitInstanceReady
+  }
+}
 
 // ── 各类命令的超时（实测标定，不要写死在 cli.ts 的默认值里）────────────────────
 
@@ -52,8 +75,8 @@ export async function listRaw(): Promise<MumuInstanceRaw[]> {
   return parsed.results
 }
 
-/** 面板用的驼峰视图列表，按 index 升序。 */
-export async function listInstances(): Promise<MumuInstance[]> {
+/** 面板用的驼峰视图列表，按 index 升序。（驱动无关的 listInstances 在 index.ts，按当前驱动分发。） */
+export async function listMumuInstances(): Promise<MumuInstance[]> {
   const raw = await listRaw()
   return raw.map(toInstance).sort((a, b) => a.index - b.index)
 }
@@ -78,7 +101,9 @@ export function toInstance(raw: MumuInstanceRaw): MumuInstance {
     serial: adbPort === null ? null : serialOf(adbPort),
     adb: 'disconnected',
     accountId: null,
-    runId: null
+    runId: null,
+    // mumutool 的配置读取端是坏的（errcode 42000），拿不到分辨率。
+    resolution: null
   }
 }
 

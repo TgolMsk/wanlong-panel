@@ -1,0 +1,19 @@
+{"at":1789457394056,"level":"info","message":"模拟器驱动 mumu，CLI=D:\\tool\\MuMuPlayer\\nx_main\\MuMuManager.exe，adb=D:\\tool\\MuMuPlayer\\nx_main\\adb.exe（MuMu 安装目录 D:\\tool\\MuMuPlayer（卸载注册表））"}
+{"at":1789457394597,"level":"info","message":"已连接实例 index=0「已登录」serial=127.0.0.1:16384，screencap 实测 2560x1440，前台=app.lawnchair"}
+{"at":1789457395145,"level":"warn","message":"模板：以下可选模板缺失，相关判据会降级（不影响主流程）：tpl_alliance_own"}
+{"at":1789457395145,"level":"info","message":"模板集 tset_mtugr5sx0iwc：界面模板 60 张，字形集 8 套，缺 1 张：tpl_alliance_own"}
+{"at":1789457395174,"level":"info","message":"当前前台是「app.lawnchair」，不是万龙觉醒，正在拉起游戏……"}
+{"at":1789457549780,"level":"info","message":"找到弹窗关闭按钮（tpl_btn_close_popup 0.8909），点它关掉活动弹窗。"}
+{"at":1789457550993,"level":"info","message":"当前在城内（tpl_nav_map_toggle 命中 0.9894），切到世界地图。"}
+{"at":1789457553805,"level":"debug","message":"已处于世界地图（tpl_nav_city_toggle 命中 0.9853）。"}
+{"at":1789457554988,"level":"debug","message":"读到「行军队列 N/M」= 4/5","data":{"field":"行军队列 N/M","text":"4/5","minScore":0.9152}}
+{"at":1789457554999,"level":"debug","message":"读到「第 1 行倒计时」= 01:04:20","data":{"field":"第 1 行倒计时","text":"01:04:20","minScore":0.9034}}
+{"at":1789457555002,"level":"debug","message":"读到「第 1 行目标坐标」= 602,532","data":{"field":"第 1 行目标坐标","text":"602,532","minScore":0.9152}}
+{"at":1789457555003,"level":"debug","message":"读到「第 1 行指挥官耐力」= 105/105","data":{"field":"第 1 行指挥官耐力","text":"105/105","minScore":0.9465}}
+{"at":1789457555012,"level":"debug","message":"读到「第 2 行倒计时」= 00:59:13","data":{"field":"第 2 行倒计时","text":"00:59:13","minScore":0.9197}}
+{"at":1789457555015,"level":"debug","message":"读到「第 2 行目标坐标」= 603,547","data":{"field":"第 2 行目标坐标","text":"603,547","minScore":0.9283}}
+{"at":1789457555027,"level":"debug","message":"读到「第 3 行目标坐标」= 616,547","data":{"field":"第 3 行目标坐标","text":"616,547","minScore":0.9405}}
+{"at":1789457555038,"level":"debug","message":"读到「第 4 行倒计时」= 00:37:58","data":{"field":"第 4 行倒计时","text":"00:37:58","minScore":0.8279}}
+{"at":1789457555025,"level":"debug","message":"读到「第 3 行倒计时」= 00:58:35","data":{"field":"第 3 行倒计时","text":"00:58:35","minScore":0.925}}
+{"at":1789457555040,"level":"debug","message":"读到「第 4 行目标坐标」= 617,538","data":{"field":"第 4 行目标坐标","text":"617,538","minScore":0.9431}}
+{"at":1789457555041,"level":"info","message":"部队管理：队列 4/5，解析出 4 行。","data":{"queueUsed":4,"queueTotal":5,"rows":[{"index":1,"status":"gathering","remainingSec":3860,"coord":"602,532"},{"index":2,"status":"gathering","remainingSec":3553,"coord":"603,547"},{"index":3,"status":"gathering","remainingSec":3515,"coord":"616,547"},{"index":4,"status":"gathering","remainingSec":2278,"coord":"617,538"}]}}

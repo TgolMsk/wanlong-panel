@@ -7,13 +7,16 @@
  */
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { basename, dirname } from 'node:path'
+import { LD_CLI_EXE, MUMU_WIN_CLI_EXE } from '@shared/constants'
 import { defaultSettings } from '@shared/defaults'
 import { appSettingsSchema } from '@shared/schemas'
 import { AppError } from '@shared/errors'
 import type { AppSettings } from '@shared/domain'
 import { defaultDataDir, settingsFilePath } from '@main/paths'
 import { emit } from '@main/ipc'
+import { detectLdInstall } from '@main/mumu/ldplayer/detect'
+import { detectMumuWinInstall } from '@main/mumu/mumuwin/detect'
 
 let current: AppSettings | null = null
 
@@ -38,7 +41,7 @@ export function isSettingsLoaded(): boolean {
  * 文件不存在 -> 用默认值并立刻落盘一份，方便用户直接改文件。
  */
 export async function loadSettings(): Promise<AppSettings> {
-  const fallback = defaultSettings(defaultDataDir())
+  const fallback = defaultSettings(defaultDataDir(), process.platform)
   const file = settingsFilePath()
 
   let raw: unknown = null
@@ -66,9 +69,49 @@ export async function loadSettings(): Promise<AppSettings> {
   // dataDir 允许为空串（defaultSettings 的占位），这里补实。
   if (!current.dataDir.trim()) current = { ...current, dataDir: defaultDataDir() }
 
+  current = await autofillEmulatorPaths(current)
+
   // 只在「文件不存在 / 被补过字段 / 被修正过」时才写回，避免每次启动都白改一次 mtime。
   if (serialize(current) !== onDisk) await persist(current)
   return current
+}
+
+/**
+ * Windows 上按模拟器种类探测安装目录并回填 adb / 管理 CLI 路径（启动与保存设置时都会跑）。
+ * 触发条件：路径为空、还是 Mac 时代的 /Applications/... 路径（从 Mac 拷来的 settings.json）、
+ * 或文件名与当前模拟器对不上（例如从雷电切到 MuMu 后 mumutoolPath 还指着 ldconsole.exe）。
+ * 管理 CLI 需要重探时 adb 也一起重探（两家的 adb 版本不同，混用会互相杀 adb server）。
+ * 探不到就原样返回，由自检项给出中文指引。macOS 上不做任何事。
+ */
+export async function autofillEmulatorPaths(s: AppSettings): Promise<AppSettings> {
+  if (process.platform !== 'win32') return s
+  const isLd = s.emulator === 'ldplayer'
+  const cliExe = isLd ? LD_CLI_EXE : MUMU_WIN_CLI_EXE
+  const wantCli = needsDetect(s.mumutoolPath, cliExe)
+  const wantAdb = wantCli || needsDetect(s.adbPath, 'adb.exe')
+  if (!wantAdb && !wantCli) return s
+
+  const label = isLd ? '雷电模拟器' : 'MuMu 模拟器'
+  const hit = isLd ? await detectLdInstall() : await detectMumuWinInstall()
+  if (!hit) {
+    console.warn(
+      `[config] 没有探测到${label}安装目录，请到「设置」页手动指定 ${cliExe} 与 adb.exe。`
+    )
+    return s
+  }
+  console.log(`[config] 已探测到${label}安装目录（${hit.source}）：${hit.dir}`)
+  return {
+    ...s,
+    adbPath: wantAdb ? hit.adbPath : s.adbPath,
+    mumutoolPath: wantCli ? hit.cliPath : s.mumutoolPath
+  }
+}
+
+/** 空串、一条 POSIX 绝对路径（Mac 的默认值）、或文件名不是期望的可执行文件，都视为「还没配对」。 */
+function needsDetect(p: string, expectExe: string): boolean {
+  const t = (p ?? '').trim()
+  if (!t || t.startsWith('/')) return true
+  return basename(t).toLowerCase() !== expectExe.toLowerCase()
 }
 
 /**
@@ -83,7 +126,8 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<AppSett
       issues: next.error.issues
     })
   }
-  current = next.data
+  // 换了模拟器种类 / 把路径清空 -> 顺手按注册表补上路径，用户不必手动找 exe。
+  current = await autofillEmulatorPaths(next.data)
   await persist(current)
 
   for (const cb of listeners) {

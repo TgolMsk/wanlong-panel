@@ -52,12 +52,12 @@ import { registerAppHandlers } from './app'
 /** 端口方法允许同步或异步实现，handler 一律 await。 */
 export type MaybePromise<T> = T | Promise<T>
 
-// ── 模块 a：MuMu 实例注册表 ───────────────────────────────────────────────
+// ── 模块 a：模拟器实例注册表（雷电 ldconsole / MuMu mumutool，按设置二选一）───────────
 
 export interface MumuPort {
   /** 内存里的当前快照（轮询维护），不触发外部进程。 */
   list(): MumuInstance[]
-  /** 强制立刻执行一次 `mumutool info all`。 */
+  /** 强制立刻执行一次 `ldconsole list2` / `mumutool info all`。 */
   refresh(): Promise<MumuInstance[]>
   get(index: number): MumuInstance | undefined
   open(index: number): Promise<void>
@@ -67,7 +67,10 @@ export interface MumuPort {
   create(opts: CreateInstanceOptions): Promise<number[]>
   clone(index: number): Promise<number[]>
   remove(index: number): Promise<void>
-  /** 透传给 `mumutool config <i> -s '<json>'`（只有写入端可用，读取端在 Mac 版是坏的）。 */
+  /**
+   * 写入实例配置。雷电：键映射到 `ldconsole modify`（见 LD_MODIFY_KEYS）；
+   * MuMu：透传给 `mumutool config <i> -s '<json>'`（只有写入端可用，读取端在 Mac 版是坏的）。
+   */
   config(index: number, settings: Record<string, unknown>): Promise<void>
   /**
    * 回填由上层掌握的字段。mumu 层自己永远不写这三个，

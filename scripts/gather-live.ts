@@ -21,7 +21,7 @@ import { join } from 'node:path'
 
 import type { LogLevel } from '@shared/script'
 import type { RawFrame, Rect } from '@shared/vision'
-import { listInstances } from '@main/mumu/index'
+import { bootstrapEmulatorForScripts, listInstances } from '@main/mumu/index'
 import { attach, initAdb } from '@main/adb/index'
 import { matchIn, prepareFrame, setTemplatesDir } from '@vision/index'
 import { sharp } from '@vision/cv'
@@ -29,6 +29,7 @@ import { sharp } from '@vision/cv'
 import {
   createAdbGatherIo,
   createRuntimeState,
+  ensureWorldMap,
   loadGatherTemplates,
   normalizeGatherConfig,
   openTroopPanel,
@@ -114,12 +115,27 @@ interface Boot {
 }
 
 async function boot(): Promise<Boot> {
+  // 驱动与 adb 路径按平台 / 环境变量解析（Windows 雷电：读注册表；macOS：MuMu 默认路径）。
+  const env = await bootstrapEmulatorForScripts()
+  await jot(
+    'info',
+    `模拟器驱动 ${env.kind}，CLI=${env.cliPath}，adb=${env.adbPath}（${env.source}）`
+  )
+
   const instances = await listInstances()
-  const target = instances.find((i) => i.state === 'running' && i.adbPort !== null)
-  if (!target || target.adbPort === null) {
-    throw new Error('没有 running 且带 adb_port 的 MuMu 实例。请先在 MuMu 里启动实例。')
+  // WL_INSTANCE=<index> 可以指定实例（多开时不止一个在跑）；不指定就取第一个 running 的。
+  const wanted = (process.env['WL_INSTANCE'] ?? '').trim()
+  const target = wanted
+    ? instances.find((i) => i.index === Number(wanted))
+    : instances.find((i) => i.state === 'running' && i.adbPort !== null)
+  if (!target || target.adbPort === null || target.state !== 'running') {
+    throw new Error(
+      wanted
+        ? `实例 ${wanted} 不存在或未运行（当前：${instances.map((i) => `${i.index}「${i.name}」${i.state}`).join('，') || '无实例'}）。`
+        : '没有 running 且带 adb 端口的模拟器实例。请先启动实例（雷电：多开器里点启动）。'
+    )
   }
-  await initAdb({ adbPath: undefined })
+  await initAdb({ adbPath: env.adbPath })
   const dev = await attach(target.index, target.adbPort)
   await jot(
     'info',
@@ -251,6 +267,10 @@ async function samplePanel(
     log: (l, m, d) => void jot(l, m, d),
     onShot: (label, raw) => void saveShot(label, raw, OUT_DIR)
   })
+  // ★ 与生产流程（flow.ts）保持一致：先确认在世界地图，再开面板。
+  //   少了这一步，游戏没在前台时会直接在 Android 桌面上匹配，然后误报「没有队伍在野外」，
+  //   而且验证不到冷启动恢复（ensureWorldMap 才是拉起游戏的那一步）。
+  await ensureWorldMap(s)
   await openTroopPanel(s)
   const reading = await readTroopPanel(s)
   await saveShot('panel', (await s.frame()).raw, OUT_DIR)

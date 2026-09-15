@@ -3305,7 +3305,34 @@
       "note": "从 panel_iron.png（huadong 面板第 1 行「坐标:674,627」）切出；字形 4（与前面的 7 黏连，单独框 4 的那一列带切）。2026-09-10 补，至此坐标字形 0-9 + 逗号齐全。",
       "createdAt": 1789030682281,
       "updatedAt": 1789030682281
+    },
+    {
+      "id": "tpl_btn_close_popup",
+      "name": "弹窗关闭·AI 自学 #1",
+      "file": "tpl_btn_close_popup.png",
+      "authoredWidth": 2560,
+      "authoredHeight": 1440,
+      "bounds": {
+        "x": 2097,
+        "y": 427,
+        "w": 86,
+        "h": 86
+      },
+      "defaultRoi": {
+        "x": 1940,
+        "y": 270,
+        "w": 400,
+        "h": 400
+      },
+      "std": 17.9,
+      "tags": [
+        "ai-harvest",
+        "popup-close"
+      ],
+      "note": "AI 自学（scheduler-sample，置信 0.95，模型 qwen3.8-flash）：预先下载活动弹窗，右上角有清晰的×关闭按钮",
+      "createdAt": 1789367230596,
+      "updatedAt": 1789367230596
     }
   ],
-  "updatedAt": 1789030682281
+  "updatedAt": 1789367230596
 }

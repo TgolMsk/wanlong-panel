@@ -30,6 +30,7 @@ import {
   readNumberText
 } from './digits'
 import { POPUP_CLOSE_ROI } from '@main/game/gather/geometry'
+import type { GamePresence } from '@main/game/launch'
 import { optionalUi, requireUi, STATUS_TEMPLATES, TPL, type SchedulerTemplates } from './templates'
 
 // ── 几何常量（参考分辨率 2560x1440）──────────────────────────────────────
@@ -124,10 +125,20 @@ export interface SampleIo {
   /**
    * 认不出界面时，把**这一帧**交给上层跑顶号/掉线探针 —— 帧已经截了，零额外开销；
    * 不这样做的话顶号只能靠「连续 N 次采样失败」的慢路径才被发现。
-   * 返回 true 表示探针命中并已接管（告警中心会暂停实例），采样器就不再盲按 BACK 试探。
+   * 返回 true 表示探针命中并已接管（告警中心会暂停实例），采样器就不再盲按 BACK 试探；
+   * 返回 'recovered' 表示上层（AI 顾问）已经把盖住画面的东西点掉了，采样器应重新截图再判、不要按 BACK。
    * 实现方不得抛异常（抛了也会被吞、按未命中处理）。
    */
-  onUnrecognized?: (raw: RawFrame) => Promise<boolean | void>
+  onUnrecognized?: (raw: RawFrame) => Promise<boolean | 'recovered' | void>
+  /**
+   * 冷启动恢复：确认游戏在前台，不在就拉起来（实现见 `src/main/game/launch.ts`）。
+   *
+   * ★ 这是「模拟器刚开机、游戏没跑」时**唯一**能自愈的一招，所以在兜底阶梯里排在
+   *   探针与盲按 BACK 的前面 —— 在 Android 桌面上按 BACK 毫无意义，只会把这次采样
+   *   判成掉线、连续三次后把实例暂停掉。
+   * 实现方不得抛异常（抛了也会被吞、按 'failed' 处理）。不接这个能力就没有冷启动恢复。
+   */
+  ensureGameForeground?: () => Promise<GamePresence>
 }
 
 export interface SampleOptions {
@@ -136,8 +147,17 @@ export interface SampleOptions {
   maxRows: number
   readOptionalFields: boolean
   closePanelAfterSample: boolean
-  /** 整次采样的截止时刻（Date.now() 口径）。 */
+  /**
+   * 整次采样的截止时刻（Date.now() 口径）。
+   * ★ 冷启动恢复（拉起游戏）后，ensurePanelOpen 会**就地把它往后推** coldStartGraceMs：
+   *   等游戏加载和后续读表共用这一份加时。调用方每次采样都新建一个 SampleOptions，改的是自己那份。
+   */
   deadlineAt: number
+  /**
+   * 冷启动拉起游戏后额外给的时间预算。不传用 DEFAULT_COLD_START_GRACE_MS。
+   * 默认 60s 的采样预算连游戏加载都不够（实测 90s 以上），不加时必然超时。
+   */
+  coldStartGraceMs?: number
 }
 
 // ── 采样结果 ──────────────────────────────────────────────────────────────
@@ -239,6 +259,22 @@ async function grab(
  */
 const OPEN_PANEL_ATTEMPTS = 5
 
+// ── 冷启动恢复（模拟器刚开机 / 游戏被杀）────────────────────────────────
+//
+// 时间全部来自真机实测（MuMu 6.6.4，2026-09-14~15）：monkey 拉起后窗口约 10s 到前台，
+// 游戏自己加载到城内要 90s 以上，加载完还常常压着一张活动弹窗要过。
+
+/** 拉起游戏后给本次采样的额外预算（含等加载 + 过弹窗 + 后续读表）。 */
+const DEFAULT_COLD_START_GRACE_MS = 180_000
+/** 刚拉起的这段时间画面是启动图，看了也白看，先盲等。 */
+const COLD_START_SETTLE_MS = 15_000
+/** 之后「只看不点」地等已知界面出现的窗口；到点就交回下面的弹窗 / BACK 阶梯。 */
+const COLD_START_RECOGNIZE_MS = 90_000
+/** 只看不点的轮询间隔（每轮还有一张约 750ms 的截图）。 */
+const COLD_START_POLL_MS = 3_000
+/** 加载完还要过活动弹窗，原来的 5 轮不够，冷启动后多给几轮。 */
+const COLD_START_EXTRA_ATTEMPTS = 6
+
 /**
  * 确保「部队管理」面板已经打开，返回可用于识别的那一帧。
  *
@@ -259,11 +295,21 @@ async function ensurePanelOpen(
   // ★ 城内判据同样按阵营各一张。只认 A 的话兽族号一进城内就永远「认不出界面」，采样连续失败
   //   （2026-09-10 huadong 实测）。B 是透明底模板：圆环里透着会变的地形，只拿控件本体匹配。
   const cityView = pickUi(t, [TPL.navMapToggle, TPL.navMapToggleB])
-  const closePopup = optionalUi(t, TPL.btnClosePopup)
+  // 手裁的 tpl_btn_close_popup + AI 顾问自学的 _ai2 / _ai3 … 全收（前缀扫描，新增变体不用改代码）。
+  const closePopups = closePopupUi(t)
   let closeTried = false
   let backTried = false
+  let coldStartTried = false
+  let maxAttempts = OPEN_PANEL_ATTEMPTS
 
-  for (let attempt = 1; attempt <= OPEN_PANEL_ATTEMPTS; attempt++) {
+  /** 这一帧是不是「已知界面」（面板 / 世界地图 / 城内）。等游戏加载时只用它判，不点任何东西。 */
+  const recognizable = async (ui: PreparedFrame): Promise<boolean> => {
+    if ((await matchIn(ui, title, { roi: PANEL_TITLE_ROI })).found) return true
+    if (await firstHit(ui, worldMap)) return true
+    return Boolean(await firstHit(ui, cityView))
+  }
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     checkDeadline(opts, `打开部队管理面板（第 ${attempt} 次尝试）`)
     const frame = await grab(io, opts)
 
@@ -287,7 +333,10 @@ async function ensurePanelOpen(
           return { ui: frame.ui, digits: frame.digits, raw: frame.raw, noMarches: true }
         }
       }
-      io.log?.('info', `当前在世界地图（${onMap.id} 命中 ${onMap.score}），点右侧列表图标打开部队管理面板。`)
+      io.log?.(
+        'info',
+        `当前在世界地图（${onMap.id} 命中 ${onMap.score}），点右侧列表图标打开部队管理面板。`
+      )
       await io.tapRef(ENTRY_TAP.x, ENTRY_TAP.y)
       await sleep(1200)
       continue
@@ -301,6 +350,48 @@ async function ensurePanelOpen(
       continue
     }
 
+    // ★ 认不出界面时，**第一件要排除的事是「游戏根本没在前台」**：模拟器刚开机、游戏被系统杀掉、
+    //   用户退到了 Android 桌面都属于这一类，也是唯一能自己救回来的一类。必须排在探针与盲按 BACK
+    //   前面 —— 在桌面上按 BACK 没有任何意义，只会让这次采样失败，连续三次后实例就被暂停了。
+    //   放在第 2 轮：第 1 轮先让动画 / 加载过去，免得每次界面闪一下都多打一次 adb。只试一次。
+    if (attempt >= 2 && !coldStartTried && io.ensureGameForeground) {
+      coldStartTried = true
+      const presence = await io.ensureGameForeground()
+      if (presence === 'launched') {
+        // 游戏刚被拉起来。本次采样默认只有 60s 预算，连加载都不够 —— 就地加时。
+        const grace = Math.max(0, opts.coldStartGraceMs ?? DEFAULT_COLD_START_GRACE_MS)
+        opts.deadlineAt += grace
+        maxAttempts += COLD_START_EXTRA_ATTEMPTS
+        io.log?.(
+          'info',
+          `游戏刚被拉起来，本次采样加时 ${Math.round(grace / 1000)}s 等它加载（期间只看画面、不点任何地方）。`
+        )
+        // 只看不点：加载中的启动图什么模板都不像，走下面的「点 ×／按 BACK」阶梯等于在启动图上乱点。
+        await sleep(COLD_START_SETTLE_MS)
+        const until = Date.now() + COLD_START_RECOGNIZE_MS
+        for (;;) {
+          checkDeadline(opts, '等游戏加载出主界面')
+          const f = await grab(io, opts)
+          if (await recognizable(f.ui)) {
+            io.log?.('info', '游戏已经加载出已知界面，继续打开部队管理面板。')
+            break
+          }
+          if (Date.now() >= until) {
+            io.log?.(
+              'info',
+              '等加载的时间用完了，界面仍然认不出（多半压着活动弹窗），交给下面的弹窗处理阶梯。'
+            )
+            break
+          }
+          await sleep(COLD_START_POLL_MS)
+        }
+        continue
+      }
+      if (presence === 'failed') {
+        io.log?.('warn', '游戏没能拉到前台，按原来的阶梯继续试探。')
+      }
+    }
+
     // 认不出界面：可能有弹窗盖着，也可能在别的二级页。前两轮只等一等（动画/加载）。
     if (attempt <= 2) {
       io.log?.('warn', '暂时认不出当前界面，等 1.5s 再看一次（可能正在播动画或加载）。')
@@ -308,21 +399,29 @@ async function ensurePanelOpen(
       continue
     }
 
-    // 第三轮起先把这一帧交给上层探针（顶号 / 断网弹窗）。命中 ⇒ 告警中心已接管，别再折腾。
-    if (await probeUnrecognized(io, frame.raw)) {
+    // 第三轮起先把这一帧交给上层探针（顶号 / 断网弹窗 / AI 顾问）。
+    //   true       ⇒ 顶号探针命中，告警中心已接管，别再折腾；
+    //   'recovered' ⇒ AI 顾问已把盖住画面的东西点掉并复验过，重新截图再判（不要按 BACK）。
+    const probe = await probeUnrecognized(io, frame.raw)
+    if (probe === true) {
       throw new AppError(
         'NOT_FOUND',
         '采样时发现顶号 / 掉线类弹窗，已交给告警中心处理（暂停实例并推送），本次采样放弃。',
         { serial: io.serial }
       )
     }
+    if (probe === 'recovered') {
+      io.log?.('info', 'AI 顾问处理了认不出的界面，重新截图再判。')
+      await sleep(600)
+      continue
+    }
     // ★ 活动弹窗（「光明精铸-自选宝物」这类带「前往」和右上角 × 的）会一直盖着主界面，
-    //   不关掉采样就永远失败。第一招：右上半屏找弹窗的 ×，找到就点它（精准）。
-    if (!closeTried && closePopup) {
+    //   不关掉采样就永远失败。第一招：找弹窗的 ×，找到就点它（精准）。
+    if (!closeTried && closePopups.length > 0) {
       closeTried = true
-      const x = await matchIn(frame.ui, closePopup, { roi: POPUP_CLOSE_ROI })
-      if (x.found) {
-        io.log?.('info', `右上角有弹窗关闭按钮（${x.score}），点它关掉活动弹窗。`)
+      const x = await matchClosePopup(frame.ui, closePopups)
+      if (x) {
+        io.log?.('info', `找到弹窗关闭按钮（${x.id} ${x.score}），点它关掉活动弹窗。`)
         await io.tapRef(x.centerX, x.centerY)
         await sleep(900)
         continue
@@ -332,7 +431,10 @@ async function ensurePanelOpen(
     // 所以紧接着必须检查并点「取消」，绝不点确定。
     if (!backTried) {
       backTried = true
-      io.log?.('warn', '认不出当前界面，可能有活动弹窗盖着；按一次 BACK 试探（若弹出退出确认框会立刻点「取消」）。')
+      io.log?.(
+        'warn',
+        '认不出当前界面，可能有活动弹窗盖着；按一次 BACK 试探（若弹出退出确认框会立刻点「取消」）。'
+      )
       await io.key('BACK')
       await sleep(1200)
       const after = await grab(io, opts)
@@ -357,9 +459,7 @@ async function ensurePanelOpen(
 
 /** 从模板集里挑出存在的那些（缺的静默跳过，由 anyTemplate 的其它成员顶上）。 */
 function pickUi(t: SchedulerTemplates, ids: string[]): PreparedTemplate[] {
-  return ids
-    .map((id) => optionalUi(t, id))
-    .filter((x): x is PreparedTemplate => Boolean(x))
+  return ids.map((id) => optionalUi(t, id)).filter((x): x is PreparedTemplate => Boolean(x))
 }
 
 /** anyTemplate：按顺序试，第一张命中的就返回（id + 分数），都不命中返回 null。 */
@@ -375,21 +475,57 @@ async function firstHit(
 }
 
 /** 把帧交给上层探针；探针没配 / 抛异常都按「未命中」处理。 */
-async function probeUnrecognized(io: SampleIo, raw: RawFrame): Promise<boolean> {
+async function probeUnrecognized(io: SampleIo, raw: RawFrame): Promise<boolean | 'recovered'> {
   if (!io.onUnrecognized) return false
   try {
-    return (await io.onUnrecognized(raw)) === true
+    const r = await io.onUnrecognized(raw)
+    return r === true ? true : r === 'recovered' ? 'recovered' : false
   } catch {
     // 探针自己的问题不能拖垮采样流程的错误语义。
     return false
   }
 }
 
+/** 模板集里所有弹窗关闭按钮模板（tpl_btn_close_popup 及 AI 自学的 _ai<N> 变体）。 */
+function closePopupUi(t: SchedulerTemplates): PreparedTemplate[] {
+  return [...t.ui.entries()]
+    .filter(([id]) => id === TPL.btnClosePopup || id.startsWith(`${TPL.btnClosePopup}_`))
+    .map(([, tpl]) => tpl)
+}
+
+/**
+ * 逐张找关闭按钮：先在右上半屏找，没有再按模板自己的 defaultRoi 找（AI 自学的模板记得那个弹窗的 × 在哪）。
+ * 返回第一张命中的（id + 分数 + 中心）。
+ */
+async function matchClosePopup(
+  ui: PreparedFrame,
+  tpls: PreparedTemplate[]
+): Promise<{ id: string; score: number; centerX: number; centerY: number } | null> {
+  for (const tpl of tpls) {
+    let m = await matchIn(ui, tpl, { roi: POPUP_CLOSE_ROI })
+    if (!m.found && tpl.defaultRoi) {
+      const r = tpl.defaultRoi
+      const inside =
+        r.x >= POPUP_CLOSE_ROI.x &&
+        r.y >= POPUP_CLOSE_ROI.y &&
+        r.x + r.w <= POPUP_CLOSE_ROI.x + POPUP_CLOSE_ROI.w &&
+        r.y + r.h <= POPUP_CLOSE_ROI.y + POPUP_CLOSE_ROI.h
+      if (!inside) m = await matchIn(ui, tpl, { roi: r })
+    }
+    if (m.found) return { id: tpl.id, score: m.score, centerX: m.centerX, centerY: m.centerY }
+  }
+  return null
+}
+
 /**
  * 认出「退出游戏确认框」就点「取消」。返回是否处理了一个确认框。
  * ★ 绝不点「确定」：那会直接退出游戏。
  */
-async function dismissExitDialog(io: SampleIo, t: SchedulerTemplates, ui: PreparedFrame): Promise<boolean> {
+async function dismissExitDialog(
+  io: SampleIo,
+  t: SchedulerTemplates,
+  ui: PreparedFrame
+): Promise<boolean> {
   const exitTitle = optionalUi(t, TPL.exitDialogTitle)
   if (!exitTitle) return false
   const dlg = await matchIn(ui, exitTitle)
@@ -707,7 +843,10 @@ export async function sampleTroopPanel(
   const centers = await detectRowCenters(ui, t, maxRows)
   const drift = centers.map((c, i) => c - rowY(i + 1)).filter((d) => Math.abs(d) > 10)
   if (drift.length > 0) {
-    io.log?.('debug', `行中心相对固定行距有偏移：${centers.map((c, i) => `${i + 1}:${c - rowY(i + 1)}`).join(' ')}（已按扫描结果识别）。`)
+    io.log?.(
+      'debug',
+      `行中心相对固定行距有偏移：${centers.map((c, i) => `${i + 1}:${c - rowY(i + 1)}`).join(' ')}（已按扫描结果识别）。`
+    )
   }
   for (let slot = 1; slot <= maxRows; slot++) {
     checkDeadline(opts, `识别第 ${slot} 行`)

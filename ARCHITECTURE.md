@@ -1,6 +1,6 @@
 # 万龙控制面板 —— 架构说明
 
-一个 Electron 桌面面板，用来管理 **MuMu 模拟器多实例**，并在每个实例上跑**基于截图 + 模板匹配**的自动化脚本，服务于多账号并发挂机。
+一个 Electron 桌面面板，用来管理**模拟器多实例**（默认 **MuMu**，也支持雷电），并在每个实例上跑**基于截图 + 模板匹配**的自动化脚本，服务于多账号并发挂机。
 
 本文件是给后续开发者（人或 agent）的地图。所有结论都来自本机实地实测，不是推断。
 
@@ -84,15 +84,23 @@ src/
 │   ├─ index.ts       app 生命周期 + 窗口                            【模块 e】
 │   ├─ ipc.ts         类型安全的 handle() / emit() 包装（已完成）     【模块 e】
 │   ├─ config.ts      设置加载/保存、路径解析、环境自检              【模块 e】
-│   ├─ mumu/          mumutool CLI 封装、实例注册表、状态轮询        【模块 a】
+│   ├─ mumu/          模拟器驱动层（driver.ts 契约）+ 实例注册表、状态轮询   【模块 a】
+│   │    ├─ mumuwin/    MuMu 驱动（Windows，MuMuManager.exe）：cli.ts / parse.ts / detect.ts / index.ts ← **当前默认**
+│   │    ├─ ldplayer/   雷电驱动（Windows）：cli.ts / parse.ts / detect.ts / index.ts
+│   │    ├─ console.ts  两个 Windows 驱动共用的控制台工具（GBK/UTF-8 解码、退出码换算）
+│   │    └─ instances.ts + cli.ts   MuMu Pro 驱动（macOS，原实现）
+│   │    ★ 目录名 mumu 是历史遗留；按 AppSettings.emulator 选驱动（`mumu` 在 Windows 落到 mumuwin/、
+│   │      在 macOS 落到 instances.ts），上层只认 EmulatorDriver
 │   ├─ adb/           serial 管理、命令执行、截图、输入、应用管理    【模块 b】
 │   ├─ store/         账号 / 模板库 / 脚本 / 日志的磁盘读写          【模块 d】
 │   ├─ orchestrator/  utilityProcess 池、MessageChannel 编排         【模块 d】
 │   ├─ game/          《万龙觉醒》自动采集：G0~G16 状态机 + 接线层   【功能块，见 README 第 6 节】
+│   │    └─ launch.ts   冷启动恢复：游戏没在前台就用 **monkey** 拉起并等到前台（am start 对本游戏无效）
 │   │    └─ resources/  「道具 → 资源统计」表：预检 → 导航 → 读表 → 还原   【见 README 第 11 节】
 │   ├─ scheduler/     ETA 记账、定时唤醒、queueFreeHook、exclusive() 借锁、onAutoChanged【见 README 第 6 / 11 节】
 │   ├─ bot/           机器人动作层 createBotActions（Electron 无关，deps 注入）+ bot:* 通道【见 README 第 11 节】
 │   ├─ stats/         数据统计：reduce（纯函数）/ store（日桶文件）/ StatsCenter 日切定时器【见 README 第 11 节】
+│   ├─ ai/            AI 顾问：认不出界面时问视觉大模型（OpenAI 兼容）→ 白名单点击 → 复验 → 自学关闭按钮模板【README 第 12 节】
 │   └─ alerts/        异常检测 → 自动暂停 → Telegram 推送 / 机器人通道 【功能块，见 README 第 7 节】
 │        ├─ detect.ts   只数数（连续失败 / 采样失败 / 长时间停滞），不写盘不发通知不关调度
 │        ├─ kicked.ts   第二层顶号识别（预留；模板缺失时静默降级，绝不抛）
@@ -126,16 +134,61 @@ src/
 **照用 wm size 会让所有模板全错位。** 每帧都读 screencap 头部的 w/h。
 
 ### 铁律三：serial 永远是 `127.0.0.1:<adb_port>`，永远带 `-s`
-- `adb_port` 每次从 `mumutool info all` 现读，**绝不推算**（实例 0 是 16384，不是 5555，尽管 5555 也在监听）。
-- adb 会自动把 5555 扫描成 `emulator-5554`，与 `127.0.0.1:16384` 是同一台机器的两个 transport
-  （boot_id 实测相同）。`adb disconnect` 清不掉（3 秒内自动扫回）。
+- MuMu：`adb_port` 每次从 `MuMuManager info`（Windows）/ `mumutool info all`（macOS）现读，**绝不推算**
+  （两个平台的实例 0 都是 16384，不是 5555，尽管 5555 也在监听；Windows 上停机实例根本没有这个键）。
+- 雷电：端口是固定公式 **`5555 + 2·index`**（`list2` 不报端口；实测实例 1 由 Ld9BoxHeadless 监听 5557，
+  ldconsole 对不存在的 index 99 也报 `emulator-5752` = 5554+2·99）。驱动按公式给，adb connect + get-state 验证。
+- 两家模拟器 adb 都会自动扫出一个 `emulator-XXXX`（MuMu 是 5554，雷电实例 1 是 5556），与 `127.0.0.1:<port>`
+  是同一台机器的两个 transport。`adb disconnect` 清不掉（3 秒内自动扫回）。
 - 结论：代码里把 `emulator-*` 当作不存在，所有命令强制带 `-s 127.0.0.1:<port>`。
 
 ---
 
 ## 5. 各层的关键实测约束
 
-### 5.1 mumutool（模块 a）
+### 5.1 模拟器驱动层（模块 a）：MuMuManager / ldconsole（Windows）、mumutool（macOS）
+
+驱动契约在 `src/main/mumu/driver.ts`：list / open / close / restart / create / clone / remove / config / rename / waitReady。
+主进程按 `AppSettings.emulator` 调 `configureEmulator()` 切换，注册表与 IPC handler 只认这个接口。
+**默认驱动是 `mumu`**（`defaultEmulatorKind()` 两个平台都返回它）；雷电要用户在「设置」页显式选。
+
+**MuMu（`src/main/mumu/mumuwin/`，Windows，2026-09-14 真机实测 6.6.4.0）**
+- 安装目录靠探测：`WL_MUMU_DIR` → 卸载注册表 `HKLM/HKCU\...\Uninstall\MuMuPlayer[-12.0]\InstallLocation`
+  → 常见目录 → 正在跑的 MuMu 进程路径往上一级。可执行文件在 `nx_main\`（新一代 6.x）或 `shell\`（MuMu 12）。
+  探到后回填 settings.json（`src/main/config.ts` 的 `autofillEmulatorPaths`，**每次保存设置也会跑**，
+  所以在设置页切换模拟器种类后路径会自动换成对应那一家的）。
+- **输出是 JSON（UTF-8）**：`info -v all` 是「以 index 字符串为键」的对象，`info -v N` 是单个对象。
+  停机实例**没有** `adb_port` / `pid` / `player_state` / `launch_err_*` 这些键。
+- **错误语义比雷电干净**：业务错误 `{"errcode":-200,"errmsg":"player index not found"}` 且**退出码 = errcode**；
+  命令拼错打整段用法文本、退出 -1。`judgeMumuWinOutput()` 一个函数收口：用法文本 → MUMU_CLI_USAGE，
+  errcode -200 / “player index not …” → MUMU_INSTANCE_MISSING，其余 errcode → MUMU_API_ERROR。
+- 状态映射：`is_process_started` + `is_android_started` 两个布尔量 →
+  没起 + `error_code`/`launch_err_code` 非 0 = error；没起 = stopped；起了没就绪 = starting；都真 = running。
+- 端口由 info 动态给（铁律三）。分辨率靠 `setting -v all -k resolution_*` 另读一次，带 30 秒缓存，
+  读失败不影响列表（只是没有「与参考分辨率不一致」的提示）。
+- **配置读写都可用**：`setting -v N -k 键 -val 值`（可多组）。面板的友好键与雷电同名
+  （resolution / cpu / memory / …），另允许直接写原始键；★ 分辨率必须同时把 `resolution_mode` 设成 `custom`，
+  只改三个 `*.custom` 值不生效。内存按 GB 存（面板填 MB，驱动换算）。
+- create / clone / delete 用「列表差集」确认结果（`clone` 成功只回 `{"errcode":0}`，不报新 index）。
+  `control -v N launch` 1.8s 返回，约 8s 后 `is_android_started` 变 true。
+
+**雷电（`src/main/mumu/ldplayer/`，2026-09-14 真机实测 14.0.26.1）**
+- 安装目录靠探测：`WL_LDPLAYER_DIR` → 注册表 `HKCU/HKLM\SOFTWARE\leidian\LDPlayer*\InstallDir` → 常见目录；
+  同级的 `ldmultiplay` / `wujie` 键不是模拟器本体，按键名过滤。探到后回填 settings.json（`src/main/config.ts`）。
+- `list2` 是 CSV（10 列：index,title,top_hwnd,bind_hwnd,android_started,pid,vbox_pid,width,height,dpi；雷电 9 只有 7 列），
+  标题可含逗号，解析器从两端切。状态映射：pid 有效 + android_started → running；pid 有效但没起 → starting；否则 stopped。
+- **退出码不可靠**：`quit/reboot/rename` 不存在的实例打 `player don't exist!` 退出码 -1001，`runapp` 打同样的话退出码却是 0，
+  `modify` 不存在的实例**静默成功**，`launch` 不存在的实例打整段用法文本。所以成败看「退出码 + 错误文本」两路，
+  针对实例的命令先 `list2` 确认存在。
+- **输出是 GBK**（系统 ANSI 代码页），先 utf8 严格解码失败再 gbk（`decodeConsoleText`）。
+- 就绪只有 `android_started` 一个信号；`launch` 立刻返回，画面要等它变 1。
+- 端口 `5555 + 2·index`（铁律三）。分辨率 `list2` 直接给，面板据此标出「与参考分辨率不一致」。
+- create / clone / remove（`add` / `copy --from` / `remove`）按「列表差集」确认结果。**真机实测（2026-09-14）：
+  `add` / `copy` 的退出码是新实例的 index**（copy --from 0 退出 3、add 退出 4，输出为空），所以这两条只按文本判错
+  （`assertLdTextOk`），退出码只用来在差集里挑出新实例；`remove` 成功退出 0。源实例正在运行时 `copy` 也能复制。
+  `add` 出来的实例默认 1280×720@280。
+
+**MuMu Pro（`src/main/mumu/instances.ts`，macOS 的 mumutool，与上面那套完全是两回事）**
 - **只能用于实例生命周期**：`info / open / close / restart / create / clone / delete / export / import / move / show / hide / port`，以及 `config -s`（写入端）。
 - **`control` 子命令族在 Mac 版整体是坏的**：`open_app / close_app / install_apk / uninstall_app / app_status / run_cmd / run_tool` 全部返回 `errcode 42000 invalidApi("/app")` 或 `invalidApi("/cmd")`。
   → **所有应用与输入操作一律走 adb，不要为 control 写任何 fallback 分支。**

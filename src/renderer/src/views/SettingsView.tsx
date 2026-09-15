@@ -73,6 +73,12 @@ export default function SettingsView(): React.JSX.Element {
     form.setFieldsValue(settings)
   }, [settings, form])
 
+  // 表单里当前选的模拟器种类（还没保存也要即时切换下面两个路径框的文案）。
+  const emulator = Form.useWatch('emulator', form) ?? settings.emulator
+  const isLd = emulator === 'ldplayer'
+  const platform = window.api?.env.platform ?? ''
+  const isWin = platform === 'win32'
+
   const save = async (): Promise<void> => {
     let v: AppSettings
     try {
@@ -94,8 +100,21 @@ export default function SettingsView(): React.JSX.Element {
   }
 
   const pick = async (field: 'adbPath' | 'mumutoolPath'): Promise<void> => {
-    const p = await tryCall('app:pickFile', [{ name: '可执行文件', extensions: ['*'] }])
+    const p = await tryCall('app:pickFile', [
+      { name: '可执行文件', extensions: isWin ? ['exe'] : ['*'] }
+    ])
     if (p) form.setFieldValue(field, p)
+  }
+
+  /** 「恢复默认值」：Windows 上默认路径是空串（等主进程探测），别把用户已填好的路径清掉。 */
+  const restoreDefaults = (): void => {
+    const d = defaultSettings(settings.dataDir, platform)
+    form.setFieldsValue({
+      ...d,
+      adbPath: d.adbPath || settings.adbPath,
+      mumutoolPath: d.mumutoolPath || settings.mumutoolPath
+    })
+    toast().info('已填入默认值，记得点「保存」才会生效')
   }
 
   const openPath = async (key: keyof ResolvedPaths): Promise<void> => {
@@ -157,14 +176,7 @@ export default function SettingsView(): React.JSX.Element {
             }
             extra={
               <Space>
-                <Button
-                  onClick={() => {
-                    form.setFieldsValue(defaultSettings(settings.dataDir))
-                    toast().info('已填入默认值，记得点「保存」才会生效')
-                  }}
-                >
-                  恢复默认值
-                </Button>
+                <Button onClick={restoreDefaults}>恢复默认值</Button>
                 <Button
                   type="primary"
                   icon={<SaveOutlined />}
@@ -178,36 +190,99 @@ export default function SettingsView(): React.JSX.Element {
           >
             <Form form={form} layout="vertical" initialValues={settings}>
               <Divider titlePlacement="start" style={{ margin: '4px 0 12px' }}>
-                可执行文件路径
+                模拟器与可执行文件路径
               </Divider>
 
               <Form.Item
+                name="emulator"
+                label="模拟器"
+                extra={
+                  isWin
+                    ? 'Windows 可选雷电（ldconsole.exe）或 MuMu（MuMuManager.exe）。切换后把下面两个路径清空再保存，面板会按注册表自动探测；也可以手动选文件。'
+                    : 'macOS 用 MuMu（mumutool）。切换后下面两个路径要跟着改。'
+                }
+              >
+                <Select
+                  options={[
+                    {
+                      value: 'mumu',
+                      label: isWin ? 'MuMu 模拟器（Windows，默认）' : 'MuMu 模拟器（macOS，默认）'
+                    },
+                    { value: 'ldplayer', label: '雷电模拟器（Windows）' }
+                  ]}
+                />
+              </Form.Item>
+
+              <Form.Item
                 label="adb 路径"
-                extra="系统 PATH 里通常没有 adb，必须指到 MuMu 自带的那一个。"
+                extra={
+                  isLd
+                    ? '系统 PATH 里通常没有 adb，必须指到雷电自带的那一个（<雷电安装目录>\\adb.exe）。面板启动时会按注册表自动探测。'
+                    : isWin
+                      ? '必须指到 MuMu 自带的那一个：<MuMu 安装目录>\\nx_main\\adb.exe（MuMu 12 是 \\shell\\adb.exe）。留空保存会按卸载注册表自动探测。'
+                      : '系统 PATH 里通常没有 adb，必须指到 MuMu 自带的那一个。'
+                }
               >
                 <Space.Compact style={{ width: '100%' }}>
                   <Form.Item
                     name="adbPath"
                     noStyle
-                    rules={[{ required: true, message: '必须填写 adb 路径' }]}
+                    rules={[{ required: !isWin, message: '必须填写 adb 路径' }]}
                   >
-                    <Input placeholder="/Applications/MuMuPlayer.app/.../tools/adb" />
+                    <Input
+                      placeholder={
+                        isLd
+                          ? 'D:\\leidian\\LDPlayer14\\adb.exe'
+                          : isWin
+                            ? 'D:\\tool\\MuMuPlayer\\nx_main\\adb.exe'
+                            : '/Applications/MuMuPlayer.app/.../tools/adb'
+                      }
+                    />
                   </Form.Item>
                   <Button onClick={() => void pick('adbPath')}>选择文件</Button>
                 </Space.Compact>
               </Form.Item>
 
               <Form.Item
-                label="mumutool 路径"
-                extra="MuMu 的多实例管理 CLI，实例的开关机 / 克隆 / 删除都靠它。"
+                label={
+                  isLd
+                    ? '雷电 ldconsole.exe 路径'
+                    : isWin
+                      ? 'MuMu MuMuManager.exe 路径'
+                      : 'mumutool 路径'
+                }
+                extra={
+                  isLd
+                    ? '雷电的命令行管理工具，实例的开关机 / 克隆 / 删除 / 改分辨率都靠它，与 adb.exe 在同一目录。'
+                    : isWin
+                      ? 'MuMu 的命令行管理工具（<MuMu 安装目录>\\nx_main\\MuMuManager.exe），实例的开关机 / 克隆 / 删除 / 改分辨率都靠它，与 adb.exe 在同一目录。留空保存会自动探测。'
+                      : 'MuMu 的多实例管理 CLI，实例的开关机 / 克隆 / 删除都靠它。'
+                }
               >
                 <Space.Compact style={{ width: '100%' }}>
                   <Form.Item
                     name="mumutoolPath"
                     noStyle
-                    rules={[{ required: true, message: '必须填写 mumutool 路径' }]}
+                    rules={[
+                      {
+                        required: !isWin,
+                        message: isLd
+                          ? '必须填写 ldconsole.exe 路径'
+                          : isWin
+                            ? '必须填写 MuMuManager.exe 路径'
+                            : '必须填写 mumutool 路径'
+                      }
+                    ]}
                   >
-                    <Input placeholder="/Applications/MuMuPlayer.app/Contents/MacOS/mumutool" />
+                    <Input
+                      placeholder={
+                        isLd
+                          ? 'D:\\leidian\\LDPlayer14\\ldconsole.exe'
+                          : isWin
+                            ? 'D:\\tool\\MuMuPlayer\\nx_main\\MuMuManager.exe'
+                            : '/Applications/MuMuPlayer.app/Contents/MacOS/mumutool'
+                      }
+                    />
                   </Form.Item>
                   <Button onClick={() => void pick('mumutoolPath')}>选择文件</Button>
                 </Space.Compact>
@@ -308,7 +383,7 @@ export default function SettingsView(): React.JSX.Element {
                   <Form.Item
                     name="instancePollIntervalMs"
                     label="实例状态轮询间隔（ms）"
-                    extra="每次轮询会调一次 mumutool info all，太快没必要。"
+                    extra={`每次轮询会调一次 ${isLd ? 'ldconsole list2' : 'mumutool info all'}，太快没必要。`}
                   >
                     <InputNumber min={1000} max={30000} step={500} style={{ width: '100%' }} />
                   </Form.Item>
@@ -324,6 +399,8 @@ export default function SettingsView(): React.JSX.Element {
           {/* 异常检测 / 自动暂停 / Telegram 推送。整块由 features/alerts 自带，
             配置存在 <dataDir>/alerts.json，不进 settings.json —— 里面有凭据。 */}
           <AlertSettingsCard />
+
+          {/* AI 顾问的配置与处理记录在侧边栏「AI 处理」页（features/ai/AiView）。 */}
 
           {/* 机器人动作测试：不方便用手机时，在面板内走同一条 bot:perform 通道验证动作。 */}
           <BotTestCard />

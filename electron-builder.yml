@@ -33,6 +33,28 @@ asarUnpack:
   - node_modules/@img/**
   - node_modules/@techstark/opencv-js/**
 
+# ── Windows ──────────────────────────────────────────────────────────────
+# 未做代码签名：首次运行安装包时 SmartScreen 会提示「未知发布者」，属预期，点「仍要运行」即可。
+# extraResources 在 Windows 上落到 <安装目录>\resources\resources\，paths.ts 的 resourcesDir() 同样命中。
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-win-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  shortcutName: ${productName}
+
+portable:
+  artifactName: ${productName}-${version}-portable-${arch}.${ext}
+
 mac:
   category: public.app-category.developer-tools
   target:

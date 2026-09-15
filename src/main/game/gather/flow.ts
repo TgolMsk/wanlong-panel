@@ -50,7 +50,13 @@ import {
   tapSearch,
   type SearchAnchor
 } from './searchPanel'
-import { GatherHalt, GatherSession, type GatherIo, type GatherLogger } from './session'
+import {
+  GatherHalt,
+  GatherSession,
+  type GatherIo,
+  type GatherLogger,
+  type UnknownScreenAdvisor
+} from './session'
 import { type GatherTemplates } from './templates'
 import { emptyTroopPanel, openTroopPanel, readTroopPanel } from './troopPanel'
 import {
@@ -81,6 +87,9 @@ export interface RunGatherCycleOptions {
   now?: () => number
   random?: () => number
   shrink?: number
+  /** 认不出界面时的外部顾问（AI），可选。 */
+  advisor?: UnknownScreenAdvisor
+  instanceIndex?: number | null
 }
 
 /** 跑一轮自动采集。**不抛异常**：一切结果都体现在返回值里（含 error 字段）。 */
@@ -98,7 +107,9 @@ export async function runGatherCycle(opts: RunGatherCycleOptions): Promise<Gathe
     onShot: opts.onShot,
     signal: opts.signal,
     now,
-    shrink: opts.shrink
+    shrink: opts.shrink,
+    advisor: opts.advisor,
+    instanceIndex: opts.instanceIndex ?? null
   })
 
   const dispatched: DispatchRecord[] = []
@@ -109,16 +120,30 @@ export async function runGatherCycle(opts: RunGatherCycleOptions): Promise<Gathe
 
   try {
     if (!cfg.enabled) {
-      return finish(s, state, dispatched, panel, 'noResourceWanted', '自动采集未启用。', null, '未启用，不安排唤醒。')
+      return finish(
+        s,
+        state,
+        dispatched,
+        panel,
+        'noResourceWanted',
+        '自动采集未启用。',
+        null,
+        '未启用，不安排唤醒。'
+      )
     }
 
     // 放弃后的冷却期。
     if (state.giveUpUntil && now() < state.giveUpUntil) {
       const left = Math.round((state.giveUpUntil - now()) / 1000)
       return finish(
-        s, state, dispatched, panel, 'giveUp',
+        s,
+        state,
+        dispatched,
+        panel,
+        'giveUp',
         `上一轮搜不到可用资源点，仍在冷却中（还剩 ${left} 秒）。`,
-        state.giveUpUntil, '冷却结束后再试。'
+        state.giveUpUntil,
+        '冷却结束后再试。'
       )
     }
 
@@ -129,10 +154,15 @@ export async function runGatherCycle(opts: RunGatherCycleOptions): Promise<Gathe
       const oldest = Math.min(...state.dispatchTimestamps)
       const at = oldest + 3_600_000
       return finish(
-        s, state, dispatched, panel, 'circuitBroken',
+        s,
+        state,
+        dispatched,
+        panel,
+        'circuitBroken',
         `最近一小时已派兵 ${state.dispatchTimestamps.length} 次，达到熔断上限 ${limit} 次，` +
           '暂停派兵（这条保护是为了在识别出错疯狂重试时兜底）。',
-        at, '等本小时窗口滑过后再试。'
+        at,
+        '等本小时窗口滑过后再试。'
       )
     }
 
@@ -220,7 +250,8 @@ export async function runGatherCycle(opts: RunGatherCycleOptions): Promise<Gathe
       state.dispatchTimestamps.push(record.at)
       state.backoffIndex = 0
       if (record.coord) {
-        if (record.travelTimeSec !== null) state.travelTimeByCoord[record.coord] = record.travelTimeSec
+        if (record.travelTimeSec !== null)
+          state.travelTimeByCoord[record.coord] = record.travelTimeSec
         state.resourceByCoord[record.coord] = record.resource
       }
       state.inFlight = toMarchRecords(panel, state, cfg)
@@ -265,7 +296,10 @@ export async function runGatherCycle(opts: RunGatherCycleOptions): Promise<Gathe
     wakeReason = '已被中止，不安排唤醒。'
   } else if (outcome === 'error') {
     wakeAt = now() + backoffSeconds(cfg, state.backoffIndex) * 1000
-    state.backoffIndex = Math.min(state.backoffIndex + 1, cfg.schedule.retryBackoffSeconds.length - 1)
+    state.backoffIndex = Math.min(
+      state.backoffIndex + 1,
+      cfg.schedule.retryBackoffSeconds.length - 1
+    )
     wakeReason = '本轮出错，按退避序列重试。'
   } else if (outcome === 'giveUp' && state.giveUpUntil) {
     wakeAt = state.giveUpUntil
@@ -287,7 +321,10 @@ export async function runGatherCycle(opts: RunGatherCycleOptions): Promise<Gathe
   }
 
   if (!message) message = '本轮结束。'
-  s.log('info', `${message} 下次唤醒：${wakeAt ? new Date(wakeAt).toLocaleTimeString('zh-CN') : '不唤醒'}（${wakeReason}）`)
+  s.log(
+    'info',
+    `${message} 下次唤醒：${wakeAt ? new Date(wakeAt).toLocaleTimeString('zh-CN') : '不唤醒'}（${wakeReason}）`
+  )
 
   return {
     outcome,
@@ -484,11 +521,7 @@ async function dispatchOne(
  * ★ 「哪些队伍是本引擎派的」只能靠**目标坐标**与派兵记账对上号，而坐标是识别出来的、可能读不出。
  *   读不出时一律**当成是自己的**（见 countOwnGathering），方向是「少派」而不是「多派」。
  */
-function freeSlots(
-  panel: TroopPanelReading,
-  cfg: GatherConfig,
-  state: GatherRuntimeState
-): number {
+function freeSlots(panel: TroopPanelReading, cfg: GatherConfig, state: GatherRuntimeState): number {
   const byQueue = panel.queueTotal - panel.queueUsed - cfg.queuePlan.reserveQueues
   const ownGathering = countOwnGathering(state)
   const byPlan = cfg.queuePlan.maxConcurrentGather - ownGathering

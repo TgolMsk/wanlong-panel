@@ -1,0 +1,18 @@
+{"at":1789363726482,"level":"info","message":"模拟器驱动 ldplayer，CLI=D:\\leidian\\LDPlayer14\\ldconsole.exe，adb=D:\\leidian\\LDPlayer14\\adb.exe（雷电安装目录 D:\\leidian\\LDPlayer14（注册表））"}
+{"at":1789363727027,"level":"info","message":"已连接实例 index=1「万龙1号」serial=127.0.0.1:5557，screencap 实测 2560x1440，前台=com.lilithgames.samo.android.cn"}
+{"at":1789363727587,"level":"warn","message":"模板：以下可选模板缺失，相关判据会降级（不影响主流程）：tpl_btn_close_popup、tpl_alliance_own"}
+{"at":1789363727588,"level":"info","message":"模板集 tset_mtugr5sx0iwc：界面模板 59 张，字形集 8 套，缺 2 张：tpl_btn_close_popup,tpl_alliance_own"}
+{"at":1789363729698,"level":"debug","message":"读到「第 1 行倒计时」= 02:24:31","data":{"field":"第 1 行倒计时","text":"02:24:31","minScore":0.9099}}
+{"at":1789363729684,"level":"debug","message":"读到「行军队列 N/M」= 5/5","data":{"field":"行军队列 N/M","text":"5/5","minScore":0.9386}}
+{"at":1789363729702,"level":"debug","message":"读到「第 1 行目标坐标」= 603,547","data":{"field":"第 1 行目标坐标","text":"603,547","minScore":0.915}}
+{"at":1789363729704,"level":"debug","message":"读到「第 1 行指挥官耐力」= 105/105","data":{"field":"第 1 行指挥官耐力","text":"105/105","minScore":0.9466}}
+{"at":1789363729716,"level":"debug","message":"读到「第 2 行目标坐标」= 619,535","data":{"field":"第 2 行目标坐标","text":"619,535","minScore":0.9352}}
+{"at":1789363729727,"level":"debug","message":"读到「第 3 行倒计时」= 01:22:34","data":{"field":"第 3 行倒计时","text":"01:22:34","minScore":0.9106}}
+{"at":1789363729729,"level":"debug","message":"读到「第 3 行目标坐标」= 623,533","data":{"field":"第 3 行目标坐标","text":"623,533","minScore":0.9397}}
+{"at":1789363729740,"level":"debug","message":"读到「第 4 行倒计时」= 01:14:47","data":{"field":"第 4 行倒计时","text":"01:14:47","minScore":0.9159}}
+{"at":1789363729742,"level":"debug","message":"读到「第 4 行目标坐标」= 602,540","data":{"field":"第 4 行目标坐标","text":"602,540","minScore":0.9134}}
+{"at":1789363729714,"level":"debug","message":"读到「第 2 行倒计时」= 02:03:13","data":{"field":"第 2 行倒计时","text":"02:03:13","minScore":0.9062}}
+{"at":1789363729754,"level":"debug","message":"读到「第 5 行目标坐标」= 611,534","data":{"field":"第 5 行目标坐标","text":"611,534","minScore":0.9292}}
+{"at":1789363729752,"level":"debug","message":"读到「第 5 行倒计时」= 00:38:24","data":{"field":"第 5 行倒计时","text":"00:38:24","minScore":0.8466}}
+{"at":1789363729756,"level":"debug","message":"读到「第 5 行指挥官耐力」= 105/105","data":{"field":"第 5 行指挥官耐力","text":"105/105","minScore":0.9107}}
+{"at":1789363729756,"level":"info","message":"部队管理：队列 5/5，解析出 5 行。","data":{"queueUsed":5,"queueTotal":5,"rows":[{"index":1,"status":"gathering","remainingSec":8671,"coord":"603,547"},{"index":2,"status":"gathering","remainingSec":7393,"coord":"619,535"},{"index":3,"status":"gathering","remainingSec":4954,"coord":"623,533"},{"index":4,"status":"gathering","remainingSec":4487,"coord":"602,540"},{"index":5,"status":"gathering","remainingSec":2304,"coord":"611,534"}]}}

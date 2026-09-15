@@ -37,18 +37,8 @@ import type {
   VisionPort
 } from '@main/handlers/index'
 
-// ── 模块 a：MuMu 实例 ─────────────────────────────────────────────────────
-import {
-  cloneInstance,
-  closeInstance,
-  configInstance,
-  createInstances,
-  createRegistry,
-  deleteInstance,
-  openInstance,
-  restartInstance,
-  setMumuCliOptions
-} from '@main/mumu/index'
+// ── 模块 a：模拟器驱动（雷电 / MuMu）+ 实例注册表 ─────────────────────────
+import { configureEmulator, createRegistry, getEmulatorDriver } from '@main/mumu/index'
 
 // ── 模块 b：adb 通道 ──────────────────────────────────────────────────────
 import {
@@ -112,10 +102,21 @@ import type { SchedulerDeps } from '@main/scheduler/index'
 import {
   FAILURE_SHOT_LABELS,
   createQueueFreeHook,
+  invalidateGatherTemplates,
   readGatherConfigFromAccount,
   type GatherRunnerDeps,
   getGatherTemplates
 } from '@main/game/gatherRunner'
+
+// ── AI 顾问：认不出界面时问视觉大模型，点掉弹窗并把关闭按钮自学成模板 ──────
+import { aiRecoverUnknownScreen, getAiAdvisor, type RecoverIo } from '@main/ai/index'
+import { emitAi, registerAiHandlers, resetAiIpc } from '@main/ai/ipc'
+import {
+  closePopupTemplates,
+  isRecognizableScreen,
+  type UnknownScreenAdvisor
+} from '@main/game/gather/index'
+import { invalidateTemplates as invalidateSchedulerTemplates } from '@main/scheduler/templates'
 
 // ── 异常检测 + 自动暂停 + 告警推送 ────────────────────────────────────────
 import type { RawFrame } from '@shared/vision'
@@ -144,17 +145,18 @@ import { readResourceStatsPanel } from '@main/game/resources/index'
 
 const registry = createRegistry()
 
+// 驱动**每次现取**：用户在设置页把雷电切成 MuMu（或反过来）后，下一次操作就该打到新驱动上。
 const mumu: MumuPort = {
   list: () => registry.snapshot(),
   refresh: () => registry.refresh(),
   get: (index) => registry.get(index),
-  open: (index) => openInstance(index),
-  close: (index) => closeInstance(index),
-  restart: (index) => restartInstance(index),
-  create: (opts) => createInstances(opts),
-  clone: (index) => cloneInstance(index),
-  remove: (index) => deleteInstance(index),
-  config: (index, settings) => configInstance(index, settings),
+  open: (index) => getEmulatorDriver().open(index),
+  close: (index) => getEmulatorDriver().close(index),
+  restart: (index) => getEmulatorDriver().restart(index),
+  create: (opts) => getEmulatorDriver().create(opts),
+  clone: (index) => getEmulatorDriver().clone(index),
+  remove: (index) => getEmulatorDriver().remove(index),
+  config: (index, settings) => getEmulatorDriver().config(index, settings),
   patch: (index, overlay) => registry.patch(index, overlay)
 }
 
@@ -322,7 +324,9 @@ function schedulerDeps(): SchedulerDeps {
       tap: (serial, x, y) => tap(serial, x, y),
       key: (serial, k) => adbKey(serial, k),
       foregroundPackage: (serial) => foregroundPackage(serial),
-      isRunning: (serial, pkg) => isRunning(serial, pkg)
+      isRunning: (serial, pkg) => isRunning(serial, pkg),
+      // ★ 冷启动恢复必须走 monkey：am start 对本游戏返回成功但进程起不来（adb/apps.ts 实测）。
+      launchApp: (serial, pkg) => launchViaMonkey(serial, pkg)
     },
     gamePackage: () => GAME_PACKAGE,
     log: (level, message) => {
@@ -332,7 +336,13 @@ function schedulerDeps(): SchedulerDeps {
     // 上次在外的队伍这次从面板上消失了 → 数据统计记「完成趟数」（资源类型由统计模块按坐标反查）。
     onMarchGone: (index, gone, at) => {
       for (const g of gone) {
-        statsCenter.record({ kind: 'tripCompleted', at, instanceIndex: index, coord: g.coord, resource: null })
+        statsCenter.record({
+          kind: 'tripCompleted',
+          at,
+          instanceIndex: index,
+          coord: g.coord,
+          resource: null
+        })
       }
     },
     // 自动调度开关翻转 → 数据统计记「暂停 / 恢复」。
@@ -361,7 +371,11 @@ function schedulerDeps(): SchedulerDeps {
     //   以前顶号只能走「连续 3 次采样失败」的慢路径（还夹着 30s/60s 退避），
     //   而且被归类成「掉线」而不是「疑似顶号」。
     //   返回是否命中：命中了采样器就不再盲按 BACK 关弹窗（顶号弹窗按 BACK 没意义）。
-    onUnrecognizedFrame: (index, raw) => probeFrameForAlerts(index, raw, '采样时'),
+    // 先跑顶号 / 掉线探针（命中 ⇒ true，告警中心接管）；没命中再问 AI 顾问（点掉弹窗 ⇒ 'recovered'）。
+    onUnrecognizedFrame: async (index, raw) => {
+      if (await probeFrameForAlerts(index, raw, '采样时')) return true
+      return aiRecoverForScheduler(index, raw)
+    },
 
     // ★ 健康探针：只截一帧不开面板。给「顶号 / 游戏退出」的发现延迟设上限（默认 3 分钟）。
     onHealthProbe: async (index, raw, ctx) => {
@@ -423,6 +437,78 @@ async function probeFrameForAlerts(index: number, raw: RawFrame, where: string):
 
 const notifyHub = getNotifyHub()
 const alertCenter = getAlertCenter()
+/** AI 顾问：只在认不出界面时被问到；关掉或没配 Key 时 isActive() 为 false，一切照旧。 */
+const aiAdvisor = getAiAdvisor()
+
+/**
+ * 采集流程（G0 兜底阶梯）用的顾问端口：把 gather 模块的上下文原样交给 recover.ts。
+ * 它只会执行「点关闭 / 点取消」并复验；back / none 交回 navigation.ts 自己的 BACK 阶梯。
+ */
+const gatherAdvisor: UnknownScreenAdvisor = {
+  handleUnknownScreen: async (ctx) => {
+    if (!aiAdvisor.isActive()) return false
+    const r = await aiRecoverUnknownScreen(aiAdvisor, {
+      instanceIndex: ctx.instanceIndex,
+      context: 'gather-g0',
+      raw: ctx.raw,
+      io: ctx.io,
+      refWidth: ctx.refWidth,
+      refHeight: ctx.refHeight,
+      setId: ctx.setId,
+      attempt: ctx.attempt,
+      recognize: ctx.recognize,
+      existingCloseTemplates: ctx.existingCloseTemplates,
+      log: ctx.log
+    })
+    return r.handled
+  }
+}
+
+/**
+ * 调度器采样时的 AI 恢复：采样器认不出界面、顶号探针也没命中时调用。
+ * 返回 'recovered' 让采样器重新截图（不按 BACK）；false 让它按原阶梯继续。绝不抛。
+ */
+async function aiRecoverForScheduler(index: number, raw: RawFrame): Promise<false | 'recovered'> {
+  if (!aiAdvisor.isActive()) return false
+  try {
+    const dev = await ensureDevice(deps, index)
+    const templates = await getGatherTemplates(paths().templatesDir, (l, m, d) =>
+      alertLog(l, `[实例${index}] ${m}`, d)
+    )
+    const io: RecoverIo = {
+      capture: () => captureRaw(dev.serial),
+      tap: async (x, y) => {
+        const p = toDevicePoint(dev, { x, y })
+        await tap(dev.serial, p.x, p.y)
+      },
+      key: (k) => adbKey(dev.serial, k)
+    }
+    const r = await aiRecoverUnknownScreen(aiAdvisor, {
+      instanceIndex: index,
+      context: 'scheduler-sample',
+      raw,
+      io,
+      refWidth: templates.refWidth,
+      refHeight: templates.refHeight,
+      setId: templates.setId,
+      attempt: 1,
+      recognize: (f) =>
+        isRecognizableScreen(templates, f, {
+          refWidth: templates.refWidth,
+          refHeight: templates.refHeight
+        }),
+      existingCloseTemplates: closePopupTemplates(templates),
+      log: (l, m, d) => alertLog(l, `[实例${index}][AI] ${m}`, d)
+    })
+    return r.handled ? 'recovered' : false
+  } catch (e) {
+    alertLog(
+      'warn',
+      `[实例${index}] AI 顾问在采样链路上出错，按未处理继续：${AppError.from(e).message}`
+    )
+    return false
+  }
+}
 /** 每日数据统计：所有事件源（派兵 / 失败 / 回城 / 告警 / 暂停恢复 / 快照）都汇到它的 record()。 */
 const statsCenter = getStatsCenter()
 
@@ -516,7 +602,10 @@ async function recoverGame(index: number): Promise<string> {
     throw new AppError('NOT_FOUND', `游戏没有回到前台（当前前台：${fg ?? '未知'}），未恢复调度。`)
   }
   if (await probeKickedOnRawFrame(raw, { templates, log: tlog })) {
-    throw new AppError('NOT_FOUND', '重启后顶号弹窗又出现了 —— 对方设备可能还在线。请先退出另一台设备再试。')
+    throw new AppError(
+      'NOT_FOUND',
+      '重启后顶号弹窗又出现了 —— 对方设备可能还在线。请先退出另一台设备再试。'
+    )
   }
   return steps.length > 0 ? steps.join(' → ') : '游戏本来就在正常运行，没有需要处理的弹窗'
 }
@@ -525,12 +614,19 @@ async function recoverGame(index: number): Promise<string> {
  * 机器人「📷 截图」：截一帧 → 降采样成宽 ≤1280 的 JPEG（约 150KB）→ 附前台包名与进程存活。
  * ★ 由动作层在 scheduler.exclusive() 内调用；这里不加锁、不点任何东西。
  */
-async function captureShotForBot(
-  index: number
-): Promise<{ jpeg: ArrayBuffer; at: number; foreground: string | null; gameRunning: boolean | null }> {
+async function captureShotForBot(index: number): Promise<{
+  jpeg: ArrayBuffer
+  at: number
+  foreground: string | null
+  gameRunning: boolean | null
+}> {
   const dev = await ensureDevice(deps, index)
   const raw = await captureRaw(dev.serial)
-  const shot = await rawFrameToShot(raw, { width: BOT_PHOTO_MAX_WIDTH, quality: BOT_PHOTO_JPEG_QUALITY }, 0)
+  const shot = await rawFrameToShot(
+    raw,
+    { width: BOT_PHOTO_MAX_WIDTH, quality: BOT_PHOTO_JPEG_QUALITY },
+    0
+  )
   let foreground: string | null = null
   let gameRunning: boolean | null = null
   try {
@@ -601,7 +697,12 @@ const telegramBot = new TelegramBot({
 
 /** 告警是"顺带"的事：它自己出问题绝不能连累采集与调度，所以统一从这里进。 */
 function raiseAlertQuietly(event: Parameters<typeof alertCenter.raise>[0]): void {
-  statsCenter.record({ kind: 'alertRaised', at: event.at, instanceIndex: event.instanceIndex, alertType: event.type })
+  statsCenter.record({
+    kind: 'alertRaised',
+    at: event.at,
+    instanceIndex: event.instanceIndex,
+    alertType: event.type
+  })
   void alertCenter.raise(event).catch((e: unknown) => {
     alertLog('error', `处理告警时出错：${AppError.from(e).message}`)
   })
@@ -652,6 +753,8 @@ async function saveAlertShot(
  */
 function gatherRunnerDeps(): GatherRunnerDeps {
   return {
+    // 认不出界面时的 AI 顾问（未启用时 handleUnknownScreen 立刻返回 false，零开销）。
+    advisor: gatherAdvisor,
     dataDir: () => paths().dataDir,
     templatesDir: () => paths().templatesDir,
     resolveSerial: async (index) => (await ensureDevice(deps, index)).serial,
@@ -702,7 +805,12 @@ function gatherRunnerDeps(): GatherRunnerDeps {
       if (pausesInstance(event.type)) {
         // 会暂停的事件必须等它做完再返回：调度器接下来就要 rearm，
         // 那时候 auto 已经是 false，才不会又排一次唤醒。
-        statsCenter.record({ kind: 'alertRaised', at: event.at, instanceIndex: index, alertType: event.type })
+        statsCenter.record({
+          kind: 'alertRaised',
+          at: event.at,
+          instanceIndex: index,
+          alertType: event.type
+        })
         await alertCenter.raise(event)
       } else {
         // 不暂停的事件（例如「长时间派不出队」）没必要占着实例锁等一次网络请求。
@@ -753,7 +861,11 @@ const FINISHED: ReadonlySet<RunStatus> = new Set(['succeeded', 'failed', 'aborte
 /** 把最新的路径与设置推给各模块。启动时一次，之后每次设置变更再来一次。 */
 let appliedAdbPath = ''
 function applyConfigToModules(settings: AppSettings, resolved: ResolvedPaths): void {
-  safely('推送 mumutool 路径', () => setMumuCliOptions({ mumutoolPath: resolved.mumutoolPath }))
+  // 先切驱动种类再设路径：路径为空会抛（Windows 上没探测到雷电时），但种类必须已经切过去，
+  // 自检才能给出「找不到雷电」而不是「找不到 mumutool」的提示。
+  safely('切换模拟器驱动', () =>
+    configureEmulator({ kind: settings.emulator, cliPath: resolved.mumutoolPath })
+  )
   safely('推送模板目录', () => setTemplatesDir(resolved.templatesDir))
   safely('推送截图节流参数', () => setMinCaptureInterval(settings.minCaptureIntervalMs))
   safely('推送 adb 路径', () => {
@@ -906,6 +1018,23 @@ async function bootstrap(): Promise<void> {
   } catch (e) {
     console.error('[main] 告警推送模块初始化失败：', e)
   }
+  // ── AI 顾问：读 <dataDir>/ai.json，注册 ai:* 通道。起不来不阻断面板（顶多是认不出界面时不问 AI）──
+  try {
+    await aiAdvisor.init({
+      dataDir: () => paths().dataDir,
+      log: (l, m) => alertLog(l, `[AI] ${m}`),
+      emit: emitAi,
+      // 自学出新模板后让两份模板缓存失效，下一轮采样 / 采集就能用上。
+      onTemplateHarvested: () => {
+        invalidateGatherTemplates()
+        invalidateSchedulerTemplates()
+      }
+    })
+    registerAiHandlers(aiAdvisor)
+  } catch (e) {
+    console.error('[main] AI 顾问模块初始化失败：', e)
+  }
+
   // ── 数据统计：在告警中心之前起来（告警中心的暂停/恢复要往它里面记事件）──
   //   起不来同样不阻断面板：顶多是没统计。
   try {
@@ -915,7 +1044,8 @@ async function bootstrap(): Promise<void> {
         (await accounts.list()).find((a) => a.instanceIndex === index)?.name ?? null,
       log: (l, m) => alertLog(l, `[统计] ${m}`),
       // 面板「读一次资源统计」：与机器人同一条路，抢同一把实例锁。
-      snapshotNow: (index) => scheduler.exclusive(index, '读资源统计', () => readResourceStatsForInstance(index))
+      snapshotNow: (index) =>
+        scheduler.exclusive(index, '读资源统计', () => readResourceStatsForInstance(index))
     })
     statsCenter.registerHandlers()
   } catch (e) {
@@ -988,6 +1118,11 @@ async function shutdown(): Promise<void> {
   } catch (e) {
     console.error('[main] 关闭告警中心失败：', e)
   }
+  try {
+    await aiAdvisor.stop()
+  } catch (e) {
+    console.error('[main] 关闭 AI 顾问失败：', e)
+  }
   for (const unsubscribe of unsubscribers.splice(0)) {
     try {
       unsubscribe()
@@ -1006,6 +1141,7 @@ async function shutdown(): Promise<void> {
     // adb 断连失败不影响退出
   }
   resetBotIpc()
+  resetAiIpc()
   resetIpc()
 }
 

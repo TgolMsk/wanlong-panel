@@ -6,16 +6,24 @@
  *   只有在确实认不出当前界面时才盲按一次 BACK，并且**紧接着必须检查并取消退出确认框**。
  */
 
+import { DEFAULT_SHRINK } from '@shared/constants'
 import { AppError } from '@shared/errors'
-import type { Point } from '@shared/vision'
+import type { Point, PreparedTemplate, RawFrame, Rect } from '@shared/vision'
+import { matchIn, prepareFrame } from '@vision/index'
 import { CARD, FIXED_TAP, GAME_PACKAGE, POPUP_CLOSE_ROI, offsetPoint } from './geometry'
 import type { GatherSession } from './session'
-import { TPL } from './templates'
+import { TPL, type GatherTemplates } from './templates'
 
 /** 「取消」按钮的兜底坐标（模板缺失时用）。实测按钮墨迹 1488..1608 / 940..1000。 */
 const CANCEL_FALLBACK: Point = { x: 1548, y: 970 }
 /** 创建部队页左上角返回箭头的兜底坐标。 */
 const BACK_ARROW_FALLBACK: Point = { x: 55, y: 68 }
+/**
+ * 拉起游戏后等它回到世界地图的最长时间。
+ * 热启动 3~5s，被系统回收过十几秒；**模拟器刚开机的冷启动实测 90s 以上**（MuMu 6.6.4，2026-09-15），
+ * 所以按最慢的给。等不到会落到下面的兜底阶梯，不会直接判死。
+ */
+const GAME_LAUNCH_WAIT_MS = 150_000
 
 /**
  * 如果屏幕上是「注意 / 确定要退出游戏吗」这类确认框，点「取消」把它关掉。
@@ -27,23 +35,51 @@ export async function dismissNoticeDialog(s: GatherSession): Promise<boolean> {
 
   s.log('warn', '检测到确认框（多半是刚才那次 BACK 触发的「退出游戏」提示），点「取消」关闭。')
   const cancel = await s.matchOptional(TPL.btnCancel)
-  const at =
-    cancel && cancel.found ? { x: cancel.centerX, y: cancel.centerY } : CANCEL_FALLBACK
+  const at = cancel && cancel.found ? { x: cancel.centerX, y: cancel.centerY } : CANCEL_FALLBACK
   // ★ 绝不点「确定」：那会退出游戏。
   await s.tapAt(at, 900)
   return true
 }
 
 /**
+ * 模板集里所有「弹窗关闭按钮」模板的 id：手裁的 tpl_btn_close_popup，以及 AI 顾问自学的
+ * tpl_btn_close_popup_ai2 / _ai3 …（src/main/ai/harvest.ts）。不同活动弹窗的 × 长得不一样，按前缀全收。
+ */
+export function closePopupTemplateIds(templates: GatherTemplates): string[] {
+  return [...templates.ui.keys()].filter(
+    (id) => id === TPL.btnClosePopup || id.startsWith(`${TPL.btnClosePopup}_`)
+  )
+}
+
+export function closePopupTemplates(templates: GatherTemplates): PreparedTemplate[] {
+  return closePopupTemplateIds(templates)
+    .map((id) => templates.get(id))
+    .filter((t): t is PreparedTemplate => Boolean(t))
+}
+
+/** 矩形 a 是否完全落在 b 里。 */
+function rectInside(a: Rect, b: Rect): boolean {
+  return a.x >= b.x && a.y >= b.y && a.x + a.w <= b.x + b.w && a.y + a.h <= b.y + b.h
+}
+
+/**
  * 活动弹窗（带「前往」和右上角 ×）盖住主界面时，点 × 关掉它。
- * 只在右上半屏找 tpl_btn_close_popup；模板缺失或没命中返回 false（由调用方退回盲按 BACK）。
+ * 每张关闭模板先在右上半屏找（绝大多数弹窗的 × 在那里），没找到再按它自己的 defaultRoi 找一遍
+ * （AI 自学的模板会记住那个弹窗的 × 在哪，可能不在右上半屏）。都没命中返回 false（由调用方退回盲按 BACK）。
  */
 export async function dismissPopupByClose(s: GatherSession): Promise<boolean> {
-  const x = await s.matchOptional(TPL.btnClosePopup, POPUP_CLOSE_ROI)
-  if (!x || !x.found) return false
-  s.log('info', `右上角有弹窗关闭按钮（${x.score}），点它关掉活动弹窗。`)
-  await s.tapAt({ x: x.centerX, y: x.centerY }, 900)
-  return true
+  for (const id of closePopupTemplateIds(s.templates)) {
+    const tpl = s.templates.get(id)
+    let x = await s.matchOptional(id, POPUP_CLOSE_ROI)
+    if ((!x || !x.found) && tpl?.defaultRoi && !rectInside(tpl.defaultRoi, POPUP_CLOSE_ROI)) {
+      x = await s.matchOptional(id, tpl.defaultRoi)
+    }
+    if (!x || !x.found) continue
+    s.log('info', `找到弹窗关闭按钮（${id} ${x.score}），点它关掉活动弹窗。`)
+    await s.tapAt({ x: x.centerX, y: x.centerY }, 900)
+    return true
+  }
+  return false
 }
 
 /** 关掉资源点卡片：点卡片外的空地（比 BACK 安全）。 */
@@ -100,6 +136,36 @@ export const WORLD_MAP_TEMPLATES = [TPL.navCityToggle, TPL.navCityToggleB, TPL.w
 export const CITY_TEMPLATES = [TPL.navMapToggle, TPL.navMapToggleB]
 
 /**
+ * 「这一帧是不是流程认识的界面」的判据集合：世界地图 / 城内 / 部队管理面板 / 搜索面板 / 资源点卡片 / 创建部队页。
+ * AI 顾问点掉弹窗之后用它复验 —— 只有回到这些界面之一，才承认那次点击有效、才允许自学模板。
+ */
+export const KNOWN_SCREEN_TEMPLATES: readonly string[] = [
+  ...WORLD_MAP_TEMPLATES,
+  ...CITY_TEMPLATES,
+  TPL.panelTitleTroop,
+  TPL.btnSearch,
+  TPL.btnGather,
+  TPL.titleCreateTroop
+]
+
+/** 用模板判断一帧是不是已知界面。纯计算，不碰设备。 */
+export async function isRecognizableScreen(
+  templates: GatherTemplates,
+  raw: RawFrame,
+  opts: { refWidth: number; refHeight: number; shrink?: number }
+): Promise<boolean> {
+  const shrink = opts.shrink ?? DEFAULT_SHRINK
+  const frame = await prepareFrame(raw, { refW: opts.refWidth, refH: opts.refHeight, shrink })
+  for (const id of KNOWN_SCREEN_TEMPLATES) {
+    const tpl = templates.get(id)
+    if (!tpl || tpl.shrink !== shrink) continue
+    const m = await matchIn(frame, tpl, { roi: tpl.defaultRoi })
+    if (m.found) return true
+  }
+  return false
+}
+
+/**
  * G0：确保游戏在前台，且当前处于世界地图。
  *
  * @throws AppError 尝试若干次仍回不到世界地图
@@ -109,14 +175,32 @@ export async function ensureWorldMap(s: GatherSession, maxAttempts = 6): Promise
   const fg = await s.io.foregroundPackage()
   if (fg !== GAME_PACKAGE) {
     s.log('info', `当前前台是「${fg ?? '未知'}」，不是万龙觉醒，正在拉起游戏……`)
-    await s.io.launchApp(GAME_PACKAGE, false)
+    // ★ 优先走 ensureGameForeground（内部用 monkey 并等到前台）。
+    //   直接用 launchApp 等于 `am start`：对本游戏返回成功但进程根本起不来，
+    //   模拟器刚开机时会在下面白等一分钟再判失败（2026-09-15 真机踩到）。
+    if (s.io.ensureGameForeground) await s.io.ensureGameForeground(GAME_PACKAGE)
+    else await s.io.launchApp(GAME_PACKAGE, false)
     s.invalidate()
-    // 冷/热启动都给足时间：热启动通常 3~5s，刚被系统回收过则要十几秒。
-    const back = await s.waitFor(WORLD_MAP_TEMPLATES, { waitMs: 60_000, pollMs: 2000 })
-    if (back) {
-      s.log('info', '游戏已回到世界地图。')
-      return
-    }
+    // ★ 等的是「**游戏加载完了**」，判据有两类，命中任一就往下走：
+    //     ① 任一已知界面（世界地图 / 城内 / 面板 / 卡片…）
+    //     ② 活动弹窗的关闭 ×  —— 它出现就说明主界面已经加载出来了，只是被盖住
+    //   只等世界地图是不够的：冷启动后游戏多半加载进的是**城内**，而且常压着一张全屏活动弹窗，
+    //   两种情况都会白白等满超时（2026-09-15 真机实测，为此多花了 60s）。
+    //   命中之后交给下面的兜底阶梯 —— 关弹窗、从城内切地图都是它的活。
+    const loadedSignals = [
+      ...KNOWN_SCREEN_TEMPLATES,
+      ...closePopupTemplates(s.templates).map((t) => t.id)
+    ]
+    const known = await s.waitFor(loadedSignals, {
+      waitMs: GAME_LAUNCH_WAIT_MS,
+      pollMs: 2500
+    })
+    s.log(
+      known ? 'info' : 'warn',
+      known
+        ? '游戏已经加载出已知界面，继续回到世界地图。'
+        : `等了 ${Math.round(GAME_LAUNCH_WAIT_MS / 1000)}s 仍然认不出界面，交给下面的兜底阶梯。`
+    )
   }
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -186,6 +270,39 @@ export async function ensureWorldMap(s: GatherSession, maxAttempts = 6): Promise
 
     // 认不出来了。先看右上角有没有活动弹窗的 ×（有就点它，比 BACK 精准）。
     if (await dismissPopupByClose(s)) continue
+
+    // 再问 AI 顾问（若启用）：它只会执行「点关闭 / 点取消」并自行复验、自学模板；
+    // 「按返回」「不动」这类建议它不执行，交回下面的 BACK 阶梯（安全逻辑只写一份）。
+    if (s.advisor) {
+      const f = await s.frame()
+      let handled = false
+      try {
+        handled = await s.advisor.handleUnknownScreen({
+          instanceIndex: s.instanceIndex,
+          raw: f.raw,
+          attempt,
+          io: s.io,
+          setId: s.templates.setId,
+          refWidth: s.refWidth,
+          refHeight: s.refHeight,
+          recognize: (raw) =>
+            isRecognizableScreen(s.templates, raw, {
+              refWidth: s.refWidth,
+              refHeight: s.refHeight,
+              shrink: s.shrink
+            }),
+          existingCloseTemplates: closePopupTemplates(s.templates),
+          log: (level, message, data) => s.log(level, message, data)
+        })
+      } catch (e) {
+        s.log('warn', `AI 顾问出错，按未处理继续：${e instanceof Error ? e.message : String(e)}`)
+      }
+      s.invalidate()
+      if (handled) {
+        s.log('info', 'AI 顾问处理了认不出的界面，重新判断。')
+        continue
+      }
+    }
 
     // 再盲按一次 BACK，然后**必须**检查退出确认框。
     s.log('warn', `认不出当前界面（第 ${attempt}/${maxAttempts} 次），按一次 BACK 试探。`)

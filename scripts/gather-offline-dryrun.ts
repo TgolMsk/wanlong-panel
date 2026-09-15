@@ -19,7 +19,8 @@ import { readTroopPanel } from '@main/game/gather/troopPanel'
 import { planWake, toMarchRecords } from '@main/game/gather/eta'
 import { createRuntimeState } from '@main/game/gather/types'
 
-const ROOT = '/Users/ws/Project/wanlongjs'
+// 以 cwd 为工程根（npm run 保证 cwd 是工程根）；以前写死作者机器的绝对路径，换机器就找不到帧目录。
+const ROOT = process.cwd()
 const cache = new Map<string, RawFrame>()
 async function frame(name: string): Promise<RawFrame> {
   const hit = cache.get(name)

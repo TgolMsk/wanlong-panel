@@ -13,7 +13,14 @@
 import { DEFAULT_SHRINK, REF_HEIGHT, REF_WIDTH } from '@shared/constants'
 import { AppError } from '@shared/errors'
 import type { AndroidKey, LogLevel } from '@shared/script'
-import type { MatchResult, Point, PreparedFrame, RawFrame, Rect } from '@shared/vision'
+import type {
+  MatchResult,
+  Point,
+  PreparedFrame,
+  PreparedTemplate,
+  RawFrame,
+  Rect
+} from '@shared/vision'
 import { matchIn, prepareFrame } from '@vision/index'
 import {
   GLYPH_LOW_CONFIDENCE,
@@ -22,6 +29,7 @@ import {
   type DigitReading
 } from '../vision/digits'
 import { sampleRgb, type Rgb } from '../vision/raster'
+import type { GamePresence } from '../launch'
 import type { GatherConfig } from './config'
 import type { GatherTemplates } from './templates'
 import type { GatherOutcome } from './types'
@@ -35,6 +43,12 @@ export interface GatherIo {
   key(k: AndroidKey): Promise<void>
   launchApp(packageName: string, cold?: boolean): Promise<void>
   foregroundPackage(): Promise<string | null>
+  /**
+   * 冷启动恢复：确认游戏在前台，不在就拉起来（实现见 `src/main/game/launch.ts`，内部用 monkey）。
+   * ★ 模拟器刚开机 / 游戏被系统杀掉时**必须**走它：`launchApp` 底下是 `am start`，
+   *   对《万龙觉醒》会返回成功但进程根本起不来。可选是为了让离线自检里的假 io 不必实现。
+   */
+  ensureGameForeground?(packageName: string): Promise<GamePresence>
 }
 
 export type GatherLogger = (
@@ -42,6 +56,34 @@ export type GatherLogger = (
   message: string,
   data?: Record<string, unknown>
 ) => void
+
+/**
+ * 「认不出界面」时的外部顾问（主进程接的是 AI 视觉大模型，见 src/main/ai/recover.ts）。
+ * gather 模块不认识它的实现，只在 ensureWorldMap 的兜底阶梯里、盲按 BACK 之前调一次。
+ * 返回 true = 顾问改变了画面（点掉了弹窗），调用方应重新截图再判；false = 什么都没做，按原阶梯继续。
+ * ★ 实现方只允许执行「点关闭 / 点取消」这类动作并自行复验；BACK 等安全敏感动作必须交回调用方。
+ */
+export interface UnknownScreenAdvisor {
+  handleUnknownScreen(ctx: UnknownScreenContext): Promise<boolean>
+}
+
+export interface UnknownScreenContext {
+  instanceIndex: number | null
+  /** 认不出的那一帧。 */
+  raw: RawFrame
+  /** 兜底阶梯的第几次尝试。 */
+  attempt: number
+  io: GatherIo
+  /** 当前模板集 id（顾问自学模板时往这里存）。 */
+  setId: string
+  refWidth: number
+  refHeight: number
+  /** 用本地模板判断一帧是不是已知界面（世界地图 / 城内 / 面板…）。 */
+  recognize: (raw: RawFrame) => Promise<boolean>
+  /** 模板集里已有的弹窗关闭模板（顾问去重用，避免同一个 × 被裁多次）。 */
+  existingCloseTemplates: PreparedTemplate[]
+  log: GatherLogger
+}
 
 /**
  * 需要立刻结束本轮、且**不是**代码 bug 的情况（中止、熔断）。
@@ -69,6 +111,10 @@ export interface GatherSessionOptions {
   refHeight?: number
   shrink?: number
   now?: () => number
+  /** 认不出界面时的外部顾问（可选）。 */
+  advisor?: UnknownScreenAdvisor
+  /** 本会话跑在哪个实例上（只用于顾问的记录与限频）。 */
+  instanceIndex?: number | null
 }
 
 export interface Frame {
@@ -90,6 +136,8 @@ export class GatherSession {
   readonly refHeight: number
   readonly shrink: number
   readonly warnings: string[] = []
+  readonly advisor?: UnknownScreenAdvisor
+  readonly instanceIndex: number | null
 
   private readonly logFn: GatherLogger
   private readonly onShot?: (label: string, raw: RawFrame) => void | Promise<void>
@@ -110,6 +158,8 @@ export class GatherSession {
     this.onShot = opts.onShot
     this.signal = opts.signal
     this.nowFn = opts.now ?? ((): number => Date.now())
+    this.advisor = opts.advisor
+    this.instanceIndex = opts.instanceIndex ?? null
   }
 
   // ── 基础设施 ────────────────────────────────────────────────────────────
@@ -280,12 +330,7 @@ export class GatherSession {
    * ★ `adb input swipe` 偶发 `SecurityException: INJECT_EVENTS`，实测重试即成功；
    *   adb 层本身不重试，重试必须由调用方做。
    */
-  async swipe(
-    from: Point,
-    to: Point,
-    durationMs: number,
-    afterMs = 600
-  ): Promise<void> {
+  async swipe(from: Point, to: Point, durationMs: number, afterMs = 600): Promise<void> {
     const retries = this.config.safety.swipeRetry
     let lastErr: unknown = null
     for (let attempt = 0; attempt <= retries; attempt++) {

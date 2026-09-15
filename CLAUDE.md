@@ -1,22 +1,95 @@
 # CLAUDE.md —— 万龙控制面板 开发速查
 
-Electron 面板，管理 MuMu 多实例 + 截图/模板匹配自动化。详细架构见 `ARCHITECTURE.md`。
+Electron 面板，管理模拟器多实例（**Windows MuMu / 雷电**，macOS MuMu Pro）+ 截图/模板匹配自动化。详细架构见 `ARCHITECTURE.md`。
+
+---
+
+## ★ 当前主机：Windows 11 + MuMu 模拟器 6.6.4（2026-09-14 从雷电迁移，已真机验证）
+
+工程最初在 macOS + MuMu Pro 上开发（下面「环境事实」一节保留了那台机器的数据），2026-09-14 上午移植到本机的雷电 14，
+同日下午按用户要求**迁移到 MuMu**。模块 a 是驱动层（`src/main/mumu/driver.ts`），三个实现：
+`ldplayer/`（雷电，Windows）、`mumuwin/`（MuMu，Windows，`MuMuManager.exe`）、`instances.ts`（MuMu Pro，macOS，`mumutool`）。
+`AppSettings.emulator` 只有 `ldplayer` / `mumu` 两个值，`mumu` 在 Windows 上落到 `mumuwin/`。**本机现在用 `mumu`。**
+
+| 项 | 值 |
+|---|---|
+| MuMu 安装目录 | `D:\tool\MuMuPlayer`（卸载注册表 `HKLM\...\Uninstall\MuMuPlayer\InstallLocation`；可执行文件在 `nx_main\`，MuMu 12 是 `shell\`） |
+| MuMuManager / adb | `D:\tool\MuMuPlayer\nx_main\MuMuManager.exe`（版本 6.6.4.0）、`D:\tool\MuMuPlayer\nx_main\adb.exe`（adb 1.0.41 / **36.0.0**，比雷电的 34 新，两家 adb 混用会互相杀 server） |
+| MuMu 实例 | **index 0「已登录」**（已装游戏、已登录，工作实例）；index 1「基础游戏包」= 复制用的基础实例；index 2「基础游戏包-1」是它的克隆 |
+| adb 端口 | **由 `MuMuManager info` 动态给**（实例 0 = `127.0.0.1:16384`），只在实例启动后出现；绝不推算 |
+| Android | **15**（SDK 35），型号 2201123C（小米 12 皮肤），2560×1440 @360（`resolution_mode` = tablet.1），`wm size` 报 1440x2560（竖屏物理尺寸，照旧只信 screencap 头部） |
+| MuMuManager | JSON 输出（UTF-8）；`info -v all` ~75ms；业务错误 `{"errcode":-200,"errmsg":"player index not found"}` 且退出码 = errcode；命令拼错打用法文本、退出 -1 |
+| 启动耗时 | `control -v 0 launch` 1.8s 返回，约 8s 后 `is_android_started` = true（Hyper-V 后端） |
+| 配置 | `setting -v N -k 键 -val 值`（可多组，**读写都可用**）；分辨率要走 `resolution_mode=custom` + 三个 `*.custom` 键；`-aw` 列出可写键 |
+
+```bat
+:: MuMu 常用命令（PowerShell / cmd）
+D:\tool\MuMuPlayer\nx_main\MuMuManager.exe info -v all                 :: JSON：{"0":{index,name,is_process_started,is_android_started,adb_port,pid,player_state,…},…}
+D:\tool\MuMuPlayer\nx_main\MuMuManager.exe control -v 0 launch         :: 立刻返回；shutdown / restart 同
+D:\tool\MuMuPlayer\nx_main\MuMuManager.exe setting -v 0 -k resolution_width -k resolution_height -k resolution_dpi
+D:\tool\MuMuPlayer\nx_main\MuMuManager.exe clone -v 1                  :: 克隆基础实例，新实例名「基础游戏包-N」，不报新 index（用列表差集）
+D:\tool\MuMuPlayer\nx_main\adb.exe connect 127.0.0.1:16384
+```
+
+命令行脚本**默认就是 mumu**，指定实例即可：`$env:WL_INSTANCE='0'; npm run live:probe`；要用雷电才设 `WL_EMULATOR=ldplayer`。
+切换模拟器后实例序号的含义变了：调度器记账 / 告警暂停 / 采集状态都按序号存，切换时要清（README 1.2 末尾）。
+
+## 上一台配置：Windows 11 + 雷电模拟器 14（2026-09-14 上午，仍可切回）
+
+雷电驱动与以下事实原样保留，「设置」页把模拟器切回「雷电模拟器」并清空路径即可自动探测。
+
+| 项 | 值 |
+|---|---|
+| 主机 | Windows 11 26200，i5-14600K / 48GB / RTX 5060，**Hyper-V/VBS 内核隔离开着**（雷电 14 兼容） |
+| Node / npm | v22.23.2 / **10.9.8**（没有 npm 11 的 install-scripts，`npm ci` 直接可用；`npm run approve` 会自动跳过） |
+| 雷电安装目录 | `D:\leidian\LDPlayer14`（注册表 `HKCU\SOFTWARE\leidian\LDPlayer14\InstallDir`，面板启动时自动探测并回填 settings.json） |
+| ldconsole / adb | `D:\leidian\LDPlayer14\ldconsole.exe`、`D:\leidian\LDPlayer14\adb.exe`（adb 1.0.41 / 34.0.4，与 MuMu 同版本） |
+| 目标实例 | **index 1「万龙1号」**（已装游戏、已登录）；index 0「万龙游戏」、index 2 停机 |
+| adb 端口 | **5555 + 2·index**（实例 1 = `127.0.0.1:5557`）；adb 会顺手扫出 `emulator-5556`，照旧当它不存在 |
+| Android | **14**（SDK 34），x86_64（abilist 含 arm64-v8a），型号 25019PNF3C，density 360 |
+| screencap | **2560x1440**，format=1（RGBA_8888），16 字节头，**~360ms**（Mac MuMu 是 280ms） |
+| `wm size` | `Physical size: 2560x1440`（雷电是横屏平板配置，没有 MuMu 那个 ROTATION_90 的坑，但代码照旧只信 screencap 头部） |
+| ldconsole | `list2` 15ms；`getprop` 55ms；退出码不可靠（详见 `src/main/mumu/ldplayer/cli.ts` 文件头）；输出是 **GBK** |
+| add / copy / remove | **`add` 与 `copy --from N` 的退出码 = 新实例 index**（建出 3 号就退出 3，不是错误！），`remove` 成功退出 0；都无输出。`add` 出来的实例默认 1280×720@280，面板新建时默认填 2560,1440,360 |
+| 阵营 | 「万龙1号」是变体 A（法师）：`tpl_nav_city_toggle` 0.987、放大镜 0.978，Mac 上裁的 93 张模板**原样可用** |
+
+真机验证结果（2026-09-14）：`live:probe` 7/7 符合；`live:panel` 队列 5/5、5 行倒计时与坐标全部读出（minScore 0.90~0.95）。
+`live:run`（真派兵）**尚未跑过**，要跑之前先跟用户确认。
+
+```bat
+:: 雷电常用命令（PowerShell / cmd）
+D:\leidian\LDPlayer14\ldconsole.exe list2                      :: index,title,top_hwnd,bind_hwnd,android_started,pid,vbox_pid,width,height,dpi
+D:\leidian\LDPlayer14\ldconsole.exe launch --index 1           :: 立刻返回，Android 起来后 list2 的 android_started 才变 1
+D:\leidian\LDPlayer14\ldconsole.exe quit --index 1
+D:\leidian\LDPlayer14\ldconsole.exe modify --index 1 --resolution 2560,1440,360   :: 要重启实例才生效
+D:\leidian\LDPlayer14\adb.exe connect 127.0.0.1:5557
+D:\leidian\LDPlayer14\adb.exe -s 127.0.0.1:5557 exec-out screencap > f.raw
+```
+
+环境变量（命令行脚本用，面板不用）：`WL_EMULATOR=ldplayer|mumu`、`WL_LDPLAYER_DIR`、`WL_MUMU_DIR`、`WL_EMULATOR_CLI`、`WL_ADB`、`WL_INSTANCE=<index>`。
 
 ---
 
 ## 启动
 
 ```bash
-npm install          # 依赖
+npm ci               # 依赖（npm 10 直接可用；npm 11 再跑 npm run approve）
 npm run dev          # 起 HMR + 拉起 Electron 窗口（用户点这一个就能看界面）
 npm run typecheck    # tsc --noEmit（node + web 两套）
 npm run build        # typecheck + electron-vite build
+npm run dist:win     # electron-builder --win --x64（nsis + portable，未签名）
 npm run dist:mac     # electron-builder --mac --arm64
 
 npm run smoke        # 端到端冒烟（真机，只按 HOME/APP_SWITCH + 点一次空白处）
-npm run check        # 全部离线自检（不碰模拟器、不发真实网络请求，468 项断言，约 40 秒）
-                     #   = check:sched(24) + check:gather(28，60 张真机截图回放) + check:alerts(174)
-                     #   + check:bot(76) + check:stats(73) + check:resources(93)
+npm run check        # 全部离线自检（不碰模拟器、不发真实网络请求，672 项断言，约 50 秒）
+                     #   = check:ld(41) + check:mumu(65) + check:launch(22) + check:ai(76)
+                     #   + check:sched(24) + check:gather(28，60 张真机截图回放)
+                     #   + check:alerts(174) + check:bot(76) + check:stats(73) + check:resources(93)
+                     #   ★ check:sched / check:gather 需要 gitignore 掉的 .tplkit/frames 真机截图，本机没有会报「找不到帧目录」
+npm run check:mumu   # MuMu 驱动纯函数（Windows）：info JSON 解析 / 状态映射 / errcode 判定 / setting 参数 / 安装目录探测
+npm run check:launch # ★ 冷启动恢复：游戏已在前台就绝不乱拉 / 没跑就 monkey 拉起并等前台 / 失败不抛（虚拟时钟）
+npm run check:ld     # 雷电驱动纯函数：list2 解析 / 状态映射 / GBK 解码 / 成败判定 / modify 参数
+npm run check:ai     # AI 顾问：配置三态 / 请求形状 / 失败分类 / ★ Key 泄露实测 / 限频 / ★ 端到端自学模板闭环（假 fetch + 假 IO + 合成帧）
 npm run check:alerts # 异常检测/自动暂停/Telegram 推送 + 机器人通道（含 ★ token 泄露实测、sendPhoto 走 FormData）
 npm run check:bot    # 机器人动作层（账号列表 / 截图 / 资源 / 暂停恢复 / bot:* 通道）
 npm run check:stats  # 数据统计（北京日切三种宿主时区一致、暂停跨日切分、落盘读回）
@@ -25,7 +98,8 @@ npm run live:probe   # 真机单帧模板打分（含负样本对照），不点
 npm run live:panel   # 真机读一次「部队管理」面板
 npm run live:run     # ★ 真机跑一整轮自动采集 —— 会真的派出一支采集队
 npm run live:recheck -- 150   # 采样→等 150s→再采样，校验本地 ETA 递推
-npm run live:sample -- 1 16416  # 对某个实例现场跑一次调度器采样（会切界面开关面板，不派兵），看导航判据命中哪张模板
+npm run live:sample -- 1        # 对某个实例现场跑一次调度器采样（会切界面开关面板，不派兵），看导航判据命中哪张模板
+                                #   雷电不用给端口（按 5555+2·序号 自动算）；MuMu 要给：npm run live:sample -- 1 16416
 npm run tplkit -- alpha ...     # 多帧差分去底预览（透明底模板），save 作业写 diffFrames/diffTolerance
 npm run icons                   # resources/icons/raw/{wood,gold,iron,mana}.* 白底原画 → 透明底 assets/resources/<type>.png（面板资源徽章）
 ```
@@ -34,10 +108,10 @@ npm run icons                   # resources/icons/raw/{wood,gold,iron,mana}.* �
 它在历史上抓出过 5 个「照着设计文档写就会踩」的真 bug，其中一个会让整条链路 100% 跑不起来。
 
 **首次 clone 后的坑（npm 11.19 的 install-scripts 白名单）**：
-`npm install` 之后 esbuild 的 postinstall 不会自动跑，只打 warn。执行：
+npm 11 下 `npm install` 之后 esbuild 的 postinstall 不会自动跑，只打 warn。执行：
 
 ```bash
-npm run approve      # 等价于 npm install-scripts approve esbuild 等
+npm run approve      # scripts/approve.mjs：npm ≥ 11 才真的 install-scripts approve，npm 10 直接跳过
 ```
 
 electron@44 **不再用 postinstall 下载二进制**，改成首次 `require('electron')` 时懒下载。
@@ -49,7 +123,7 @@ node node_modules/electron/install.js
 
 ---
 
-## 环境事实（已实测，直接采信）
+## 环境事实（macOS + MuMu Pro 时代，已实测，直接采信；Windows 主机见最上面那节）
 
 主机 macOS darwin 25.6.0 / Apple Silicon，Node v26.8.1，npm 11.19.0。
 
@@ -123,12 +197,16 @@ adb 会报 `-s requires an argument`。Node 的 `spawn` 用数组传参不受影
 
 1. **`src/shared/` 是契约层**，四端共用。**不得 import electron / node:fs / sharp / opencv** —— 任何副作用都会污染渲染进程。
 2. **坐标只活在参考分辨率空间**（`REF_WIDTH × REF_HEIGHT` = 2560×1440）。只有 `adb input tap` 前才用 `refToDevice()` 换算。
-3. **serial 永远是 `127.0.0.1:<adb_port>`**，`adb_port` 每次从 `mumutool info all` 现读。
+3. **serial 永远是 `127.0.0.1:<adb_port>`**。端口由驱动给：MuMu 每次从 `mumutool info all` 现读（绝不推算）；
+   雷电按它自己的固定公式 `5555 + 2·index` 算（`ldAdbPort()`），并由 adb connect + get-state 验证。
 4. **分辨率只信 screencap 头部**，不信 `wm size`。
 5. **截图用 `exec-out screencap`（raw），不用 `-p`**；Node 里必须 `spawn` + `Buffer.concat`，**禁止 `exec`/`execFile`**（utf8 解码会损坏图像）。
 6. **主进程不跑重活**。截图/匹配/脚本一律进 utilityProcess（`out/main/runner.js`）。
-7. **mumutool 的 `control` 子命令族在 Mac 版全坏**（errcode 42000）。所有 app/输入操作走 adb，不写 fallback。
-8. **mumutool 业务错误时退出码仍是 0**，必须看 JSON 的 `errcode`。用 `parseMumuEnvelope()`。
+7. **实例管理只走驱动层的 CLI，其余一切走 adb。** MuMu 的 `control` 子命令族在 Mac 版全坏（errcode 42000）；
+   雷电虽有 runapp / installapp / adb 子命令，但输出编码与退出码都不可靠，同样不用，不写 fallback。
+8. **两家 CLI 的成败都不能只看退出码。** mumutool 业务错误时退出码仍是 0，看 JSON 的 `errcode`（`parseMumuEnvelope()`）；
+   ldconsole 退出码时 0 时 -1001、还会静默成功，看「退出码 + `player don't exist!` + 用法文本」三条（`assertLdOk()`），
+   且针对实例的命令先 `list2` 确认实例存在。子进程一律 `windowsHide: true`（否则 Windows 上每次轮询闪一个黑窗）。
 9. **模板 std < 12 必须拒绝**（纯色模板会恒定返回 1.0000，让脚本乱点）。匹配 method 只能用 `TM_CCOEFF_NORMED`。
 10. **每个 OpenCV Mat 必须 `.delete()`**，用 try/finally。
 11. **preload 必须编译成 `.cjs`**（sandbox 要求），**MessagePort 不能穿 contextBridge**（用 `window.postMessage` 转发）。
@@ -147,7 +225,8 @@ adb 会报 `-s requires an argument`。Node 的 `spawn` 用数组传参不受影
 
 | 操作 | 耗时 |
 |---|---|
-| `exec-out screencap` raw @2560x1440 | **~280-300ms**（720p 实例约 100ms） |
+| `exec-out screencap` raw @2560x1440 | **~280-300ms**（720p 实例约 100ms）；雷电 14 实测 **~360ms** |
+| `ldconsole list2` / `adb devices` 往返（Windows） | 15ms / 21ms |
 | `exec-out screencap -p` PNG | ~1100ms（禁用） |
 | 自写 灰度+点采样降采样 1/2 | **2.1ms**（sharp.resize 要 64ms） |
 | opencv matchTemplate 全屏灰度 1/2 | 22ms |
@@ -306,6 +385,55 @@ npm run check:alerts    # 174 项断言，不碰模拟器、不发真实网络�
 5. **暂停 / 恢复统计事件只从 `SchedulerDeps.onAutoChanged` 进**（开关真的翻转才通报）。告警中心、机器人、面板开关都不许再各记一份。
 6. **sendPhoto 走 FormData，不手设 content-type**；每次重试重新构造 FormData（流只能消费一次）；>10MB 直接退化成文字。
 7. **字形集缺字（现缺 5 / 8 / 逗号，单位缺「万」）时读数置 null 并把原文回给用户，绝不给错值。** 补字形用 tplkit，json 已标 `missing`。
+
+## AI 顾问：认不出界面时问视觉大模型 + 模板自学习（`src/main/ai/`）
+
+使用说明见 `README.md` 第 12 节。分层：`advisor.ts` 只出主意（配置 / 限频 / 两阶段问询 / 记录），
+`recover.ts` 只动手（白名单点击 / 复验 / 自学模板），`client.ts` 是 OpenAI 兼容视觉接口，`harvest.ts` 裁模板入库。
+接入点：`gather/navigation.ts` 的 `ensureWorldMap`（`s.advisor`，盲按 BACK 之前）与 `scheduler/troopPanel.ts` 的
+`ensurePanelOpen`（`onUnrecognized` 返回 `'recovered'`）。契约在 `src/shared/ai.ts`。
+
+### 六条铁律
+
+1. **动作白名单只有 tap_close / tap_cancel / back / none，且只执行前两种。** back / none 交回调用方自己的 BACK 阶梯 ——
+   「BACK 之后必须取消退出框」这条安全逻辑只能写一份。绝不给白名单加「确定」「派兵」之类的动作。
+2. **点完必须复验。** 画面没变（shrink=4 平均绝对差 < 6）当没发生；变了但 `recognize()` 认不出只算 `applied`；
+   只有回到已知界面（`isRecognizableScreen`）才算 `verified`、才允许自学模板。
+3. **自学模板走 `@vision/store.saveTemplate`**（方差守卫 / 原子写），id 是 `tpl_btn_close_popup` 或 `_ai<N>`（≤ 8 张），
+   两条链路都按前缀扫描；学完调 `templateHarvested()` 让采集与调度器两份模板缓存失效。已有模板能认出的 × 不重复学。
+4. **限频是熔断不是优化**：`maxCallsPerHour`（全局）+ `cooldownSeconds`（每实例），只算真正发出的请求；未启用时连 skipped 都不记。
+5. **★★ apiKey 是凭据**，纪律与 Telegram token 完全一致：只存 `<dataDir>/ai.json`；过 IPC 只送 `toAiConfigView()`
+   （类型上没有 apiKey）；`chatVision()` 绝不抛异常、每处 catch 先 `scrubAiSecret()`；`note()` 落记录前再洗一次。
+6. **默认值只有一份权威：`defaultAiConfig()`**（默认模型 `qwen3.8-flash`，百炼兼容模式地址）。设置页的 min/max 来自 `AI_RANGE`。
+
+### 提示词与坐标
+
+模型收到的是缩到 `imageWidth`（默认 1280）宽的 JPEG，边界框是**那张图的像素**，`consult()` 按比例换算到参考坐标；
+`refine` 开着时再从裸帧裁出目标周围一块（<480 宽就放大 2 倍）以 PNG 问一次精确框，精修框跑出外扩区就沿用整帧框。
+回复解析宽容：剥 ```json 围栏、接受 `{x,y,w,h}` / `{bbox:[x1,y1,x2,y2]}` / `{x1,y1,x2,y2}` 三种写法。
+
+## 冷启动恢复：模拟器刚开机、游戏没跑（`src/main/game/launch.ts`）
+
+这是「采集自己救不回来」最常见的一类，2026-09-15 补上。两条铁则：
+
+1. **《万龙觉醒》只能用 monkey 拉起。** `am start -n <组件>` 返回成功但进程根本起不来
+   （`adb/apps.ts` 的 `launchViaMonkey` 文件头有实测记录）。凡是「把游戏拉起来」的地方一律用它，
+   `launch()` / `coldStart()` 只能用于别的普通应用。
+2. **拉起 ≠ 能用。** monkey 返回后窗口约 10s 到前台，冷启动真正进到城内**实测 90s 以上**，
+   而且加载完常常压着一张活动弹窗。所以 `ensureGameForeground()` 只负责把**前台**等到游戏，
+   「等到能识别的界面」由调用方拿模板轮询。
+
+接入的两处（都在「认不出界面」的兜底阶梯里，**排在探针与盲按 BACK 之前** ——
+在 Android 桌面上按 BACK 毫无意义，只会把采样判成掉线、三次后暂停实例）：
+
+| 位置 | 做法 |
+|---|---|
+| 调度器采样 `scheduler/troopPanel.ts` 的 `ensurePanelOpen` | 第 2 轮认不出时调 `io.ensureGameForeground()`；返回 `'launched'` 就**就地给 `opts.deadlineAt` 加时** 180s、多给 6 轮尝试，然后「只看不点」地轮询到已知界面出现（默认 60s 的采样预算连加载都不够） |
+| 采集流程 `game/gather/navigation.ts` 的 `ensureWorldMap` | 前台不是游戏就调 `s.io.ensureGameForeground()`，再按 150s 等世界地图 |
+
+★ `openTroopPanel`（gather 模块）**假定已经在世界地图**，调用前必须先 `ensureWorldMap`。
+少这一步的话，游戏没跑时会在 Android 桌面上匹配，然后误报「没有队伍在野外」返回空队列
+（`scripts/gather-live.ts` 原来就漏了这一步，2026-09-15 修）。
 
 ## UI 坑：antd 6 表格固定列
 - antd 6 底层是 `@rc-component/table`，固定单元格类名是 `ant-table-cell-fix-start` / `-fix-end`（**不是** v5 的 `-fix-left` / `-fix-right`）。

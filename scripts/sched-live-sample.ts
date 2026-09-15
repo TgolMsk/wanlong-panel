@@ -3,7 +3,8 @@
  * 用来验证导航判据 / 模板改动在真机上的表现（城内→世界地图→部队管理面板→读数→关面板）。
  * 会真的点击，但**不会派兵**。
  *
- *   npm run live:sample -- <实例序号> <adb端口>      例：npm run live:sample -- 1 16416
+ *   npm run live:sample -- <实例序号> [adb端口]      例：npm run live:sample -- 1        （雷电：端口按 5555+2·序号 自动算）
+ *                                                    例：npm run live:sample -- 1 16416  （MuMu：端口从 mumutool info 抄）
  *
  * ⚠️ 面板若正在自动调度同一实例，两边会互相干扰；跑之前确认该实例已暂停或没到唤醒点。
  */
@@ -12,15 +13,26 @@ import { join } from 'node:path'
 import { REF_HEIGHT, REF_WIDTH } from '@shared/constants'
 import { setTemplatesDir } from '@vision/index'
 import { attach, captureRaw, initAdb, key, tap } from '@main/adb/index'
+import { bootstrapEmulatorForScripts, listInstances } from '@main/mumu/index'
 import { getTemplates } from '@main/scheduler/templates'
 import { sampleTroopPanel, type SampleIo } from '@main/scheduler/troopPanel'
 
 const index = Number(process.argv[2] ?? 0)
-const port = Number(process.argv[3] ?? 16384)
+const portArg = process.argv[3] ? Number(process.argv[3]) : null
 
 async function main(): Promise<void> {
   setTemplatesDir(join(process.cwd(), '.wl-data', 'templates'))
-  await initAdb({})
+  const env = await bootstrapEmulatorForScripts()
+  await initAdb({ adbPath: env.adbPath })
+  // 没给端口就问驱动：雷电按公式、MuMu 从 info 现读，都不用人抄。
+  let port = portArg
+  if (port === null) {
+    const inst = (await listInstances()).find((i) => i.index === index)
+    if (!inst || inst.adbPort === null) {
+      throw new Error(`实例 ${index} 不存在或未运行，拿不到 adb 端口。`)
+    }
+    port = inst.adbPort
+  }
   const dev = await attach(index, port)
   const t = await getTemplates({ templateSetId: '', refWidth: REF_WIDTH })
   const io: SampleIo = {

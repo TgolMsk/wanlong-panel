@@ -35,7 +35,8 @@ import {
   type DispatchRecord,
   type GatherCycleResult,
   type GatherRuntimeState,
-  type GatherTemplates
+  type GatherTemplates,
+  type UnknownScreenAdvisor
 } from './gather/index'
 
 /** 采集运行期状态的落盘文件名（放在 dataDir 根下，与 scheduler.json 并列）。 */
@@ -101,6 +102,11 @@ export interface GatherRunnerDeps {
    * ★ 在 onCycleResult 之后、往调度器抛错之前调用；实现方抛错只记一条 warn，绝不连累采集与派兵记账。
    */
   onDispatched?(instanceIndex: number, records: DispatchRecord[], at: number): Promise<void> | void
+  /**
+   * 认不出界面时的 AI 顾问（可选）。原样交给 runGatherCycle，在 G0 兜底阶梯里、盲按 BACK 之前被调一次。
+   * 见 src/main/ai/recover.ts；没配就是原来的行为。
+   */
+  advisor?: UnknownScreenAdvisor
 }
 
 export type { DispatchRecord }
@@ -312,7 +318,9 @@ export async function runGatherWithContext(
     state,
     signal,
     log: (level, message, data) => deps.log(level, `[实例${instanceIndex}] ${message}`, data),
-    onShot
+    onShot,
+    advisor: deps.advisor,
+    instanceIndex
   })
 
   // ★ 必须存回去：等级上限缓存 / 在途记账 / 退避档位都在里面。
@@ -401,7 +409,10 @@ export function createQueueFreeHook(
       try {
         await deps.onDispatched(index, result.dispatched, Date.now())
       } catch (e) {
-        deps.log('warn', `[实例${index}] 数据统计记派兵时出错（不影响采集）：${AppError.from(e).message}`)
+        deps.log(
+          'warn',
+          `[实例${index}] 数据统计记派兵时出错（不影响采集）：${AppError.from(e).message}`
+        )
       }
     }
 

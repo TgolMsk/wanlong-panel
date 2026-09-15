@@ -27,3 +27,5 @@ wl.config.local.json
 #   这里再兜一道：无论谁把它拷到工程里的哪个角落，都不许进 git。
 alerts.json
 alerts-pauses.json
+# ★★ AI 顾问配置里有大模型平台的 API Key（凭据），同样一律不进 git。
+ai.json

@@ -55,7 +55,14 @@ export {
   type GatherTemplates,
   type LoadGatherTemplatesOptions
 } from './templates'
-export { GatherHalt, GatherSession, type GatherIo, type GatherLogger } from './session'
+export {
+  GatherHalt,
+  GatherSession,
+  type GatherIo,
+  type GatherLogger,
+  type UnknownScreenAdvisor,
+  type UnknownScreenContext
+} from './session'
 export {
   createRuntimeState,
   TROOP_STATUS_LABEL,
@@ -71,9 +78,25 @@ export {
 export { GAME_PACKAGE } from './geometry'
 
 // 单个状态的入口也导出，便于排障工具/单测直接调某一段流程。
-export { readCard, reconcileAutoGather, validateCard, waitForCard, type CardReading, type CardVerdict } from './card'
+export {
+  readCard,
+  reconcileAutoGather,
+  validateCard,
+  waitForCard,
+  type CardReading,
+  type CardVerdict
+} from './card'
 export { dispatchTroop, type DispatchResult } from './dispatch'
-export { closeTroopPanel, dismissNoticeDialog, ensureWorldMap } from './navigation'
+export {
+  KNOWN_SCREEN_TEMPLATES,
+  closePopupTemplateIds,
+  closePopupTemplates,
+  closeTroopPanel,
+  dismissNoticeDialog,
+  dismissPopupByClose,
+  ensureWorldMap,
+  isRecognizableScreen
+} from './navigation'
 export {
   classifyCategory,
   initialSearchFloor,

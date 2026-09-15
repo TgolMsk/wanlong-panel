@@ -36,7 +36,7 @@ import type { ScriptDef } from '@shared/script'
 import type { WorkerAttachPayload, WorkerToMain, WorkerToRenderer } from '@shared/worker'
 import type { PreparedFrame, Rect } from '@shared/vision'
 
-import { listInstances } from '@main/mumu/index'
+import { bootstrapEmulatorForScripts, listInstances } from '@main/mumu/index'
 import {
   attach,
   captureRaw,
@@ -193,16 +193,24 @@ async function main(): Promise<void> {
   await mkdir(paths.logsDir, { recursive: true })
   await mkdir(DOCS_DIR, { recursive: true })
 
-  const settings: AppSettings = { ...defaultSettings(DATA_DIR) }
+  // 驱动与 adb 路径按平台 / 环境变量解析（Windows 雷电读注册表；macOS 用 MuMu 默认路径）。
+  const env = await bootstrapEmulatorForScripts()
+  console.log(`模拟器驱动：${env.kind}，CLI=${env.cliPath}，adb=${env.adbPath}（${env.source}）`)
+  const settings: AppSettings = {
+    ...defaultSettings(DATA_DIR, process.platform),
+    emulator: env.kind,
+    adbPath: env.adbPath,
+    mumutoolPath: env.cliPath
+  }
 
   // ── 1. 实例列表 ─────────────────────────────────────────────────────────
-  banner('通过 mumu 封装列出实例（listInstances）')
+  banner('通过模拟器驱动列出实例（listInstances）')
   let instances: Awaited<ReturnType<typeof listInstances>> = []
   const tList = Date.now()
   try {
     instances = await listInstances()
     const cost = ms(tList)
-    console.log(`mumutool info all 耗时 ${cost}ms，共 ${instances.length} 个实例：`)
+    console.log(`实例列举（${env.kind}）耗时 ${cost}ms，共 ${instances.length} 个实例：`)
     for (const i of instances) {
       console.log(
         `  index=${i.index}  name=${i.name}  state=${i.state}  adbPort=${i.adbPort ?? '-'}  ` +
@@ -216,9 +224,7 @@ async function main(): Promise<void> {
       running.length > 0,
       running.length > 0
         ? `${instances.length} 个实例，${running.length} 个 running；` +
-            running
-              .map((i) => `index=${i.index}「${i.name}」adb_port=${i.adbPort}`)
-              .join('，') +
+            running.map((i) => `index=${i.index}「${i.name}」adb_port=${i.adbPort}`).join('，') +
             `；耗时 ${cost}ms`
         : '没有任何 running 且带 adb_port 的实例，后续验证无法进行'
     )
@@ -229,7 +235,7 @@ async function main(): Promise<void> {
 
   const target = instances.find((i) => i.state === 'running' && i.adbPort !== null)
   if (!target || target.adbPort === null) {
-    throw new Error('没有可用的 running 实例，冒烟中止。请先在 MuMu 里启动一个实例。')
+    throw new Error('没有可用的 running 实例，冒烟中止。请先启动一个模拟器实例。')
   }
 
   // ── 2. adb 连接 + 真实截图 ──────────────────────────────────────────────
@@ -370,7 +376,9 @@ async function main(): Promise<void> {
   const prepared = await loadPrepared(set.id, { refW: settings.refWidth, shrink: settings.shrink })
   const tpl = prepared.get(tplDef.id)
   if (!tpl) throw new Error('loadPrepared 没能编译出刚存的模板，模板库链路有问题。')
-  console.log(`loadPrepared：${prepared.size} 张模板，探针编译后 ${tpl.w}x${tpl.h}（灰度，1/${tpl.shrink}）`)
+  console.log(
+    `loadPrepared：${prepared.size} 张模板，探针编译后 ${tpl.w}x${tpl.h}（灰度，1/${tpl.shrink}）`
+  )
 
   // ① 正样本：在同一帧里找它自己，应当几乎满分且坐标复原。
   const tMatch = Date.now()

@@ -8,12 +8,72 @@
 
 // ── 可执行文件路径（实测有效，均可被用户配置覆盖）──────────────────────────
 
-/** MuMu 自带的 adb（实测 v1.0.41 / 34.0.4）。系统 PATH 里没有 adb，必须用这个绝对路径。 */
+/** macOS：MuMu 自带的 adb（实测 v1.0.41 / 34.0.4）。系统 PATH 里没有 adb，必须用这个绝对路径。 */
 export const DEFAULT_ADB_PATH =
   '/Applications/MuMuPlayer.app/Contents/MacOS/MuMuEmulator.app/Contents/MacOS/tools/adb'
 
-/** MuMu 多实例管理 CLI。与同目录的 mumu-cli 内容一致，用哪个都行。 */
+/** macOS：MuMu 多实例管理 CLI。与同目录的 mumu-cli 内容一致，用哪个都行。 */
 export const DEFAULT_MUMUTOOL_PATH = '/Applications/MuMuPlayer.app/Contents/MacOS/mumutool'
+
+// ── 雷电模拟器（Windows）─────────────────────────────────────────────────
+//
+// Windows 上没有固定的默认路径：安装目录由用户在安装时选择（本机是 D:\leidian\LDPlayer14）。
+// 主进程启动时按「环境变量 WL_LDPLAYER_DIR -> 注册表 HKCU/HKLM\SOFTWARE\leidian\LDPlayer* 的 InstallDir
+// -> 下面的常见目录」顺序探测（src/main/mumu/ldplayer/detect.ts），探到后回填进 settings.json。
+
+/** 雷电安装目录下的两个可执行文件名。adb 与 MuMu 同为 v1.0.41 / 34.0.4。 */
+export const LD_CLI_EXE = 'ldconsole.exe'
+export const LD_ADB_EXE = 'adb.exe'
+
+/** 注册表探测失败时兜底扫描的常见安装目录。 */
+export const LD_COMMON_INSTALL_DIRS = [
+  'D:\\leidian\\LDPlayer14',
+  'C:\\leidian\\LDPlayer14',
+  'E:\\leidian\\LDPlayer14',
+  'D:\\leidian\\LDPlayer9',
+  'C:\\leidian\\LDPlayer9',
+  'E:\\leidian\\LDPlayer9',
+  'C:\\Program Files\\leidian\\LDPlayer14',
+  'C:\\Program Files\\leidian\\LDPlayer9'
+] as const
+
+/**
+ * ★ 雷电的 adb 端口规则：实例 N 监听 5555 + 2N（实测 index 1 -> 5557，由 Ld9BoxHeadless 监听）。
+ *   雷电不像 MuMu 那样在 info 里返回端口，`ldconsole list2` 也没有端口列；但它的规则是**固定的**：
+ *   ldconsole 对不存在的 index 99 报 `device 'emulator-5752' not found`，5752 = 5554 + 2*99，
+ *   证明雷电自己也是按这条公式推的。所以铁律三的「绝不推算」在雷电驱动里放宽为「按雷电公式推算，
+ *   并由 adb connect + get-state 验证」。
+ */
+export const LD_ADB_BASE_PORT = 5555
+export const LD_ADB_PORT_STEP = 2
+export function ldAdbPort(index: number): number {
+  return LD_ADB_BASE_PORT + LD_ADB_PORT_STEP * index
+}
+
+// ── MuMu 模拟器（Windows）────────────────────────────────────────────────
+//
+// 新一代 MuMu（2025 起的「MuMu模拟器」6.x，内部代号 nx）把可执行文件放在 <安装目录>\nx_main\，
+// MuMu 12 放在 <安装目录>\shell\。两代的管理 CLI 都叫 MuMuManager.exe，adb 与它同目录。
+// 安装目录由用户选（本机是 D:\tool\MuMuPlayer），注册表只在卸载项里记：
+//   HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\MuMuPlayer\InstallLocation
+// 探测顺序见 src/main/mumu/mumuwin/detect.ts。adb 端口由 `MuMuManager info` 动态给出（实例 0 = 16384），绝不推算。
+
+export const MUMU_WIN_CLI_EXE = 'MuMuManager.exe'
+export const MUMU_WIN_ADB_EXE = 'adb.exe'
+/** 安装目录下放可执行文件的子目录，按新旧顺序试。 */
+export const MUMU_WIN_BIN_SUBDIRS = ['nx_main', 'shell'] as const
+/** 注册表探测失败时兜底扫描的常见安装目录。 */
+export const MUMU_WIN_COMMON_INSTALL_DIRS = [
+  'D:\\tool\\MuMuPlayer',
+  'C:\\Program Files\\Netease\\MuMuPlayer',
+  'C:\\Program Files\\Netease\\MuMuPlayer-12.0',
+  'D:\\MuMuPlayer',
+  'D:\\Program Files\\Netease\\MuMuPlayer',
+  'D:\\Program Files\\Netease\\MuMuPlayer-12.0',
+  'D:\\Netease\\MuMuPlayer',
+  'E:\\MuMuPlayer',
+  'E:\\Program Files\\Netease\\MuMuPlayer'
+] as const
 
 /** adb server 固定端口。面板启动时会先 `adb start-server` 保证它在。 */
 export const ADB_SERVER_HOST = '127.0.0.1'

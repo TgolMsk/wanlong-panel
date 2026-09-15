@@ -301,9 +301,14 @@ export const accountsFileSchema = z.object({
 
 // ── 设置 ──────────────────────────────────────────────────────────────────
 
+export const emulatorKindSchema = z.enum(['ldplayer', 'mumu'])
+
 export const appSettingsSchema = z.object({
-  adbPath: z.string().min(1),
-  mumutoolPath: z.string().min(1),
+  emulator: emulatorKindSchema,
+  // ★ 两个路径允许空串：Windows 上表示「尚未探测到雷电安装目录」，由主进程启动时回填，
+  //   自检项会把「路径为空」翻译成可操作的中文指引；写成 min(1) 会让整份设置回退成默认值。
+  adbPath: z.string(),
+  mumutoolPath: z.string(),
   dataDir: z.string().min(1),
   refWidth: z.number().int().positive(),
   refHeight: z.number().int().positive(),

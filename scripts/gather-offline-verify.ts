@@ -16,7 +16,8 @@ import { CREATE_TROOP, VALUE_RIGHT_OF_LABEL } from '@main/game/gather/geometry'
 import { parseGrouped, parseGroupedRatio } from '@main/game/vision/digits'
 import { parseHmsFlexible } from '@main/game/gather/parse'
 
-const ROOT = '/Users/ws/Project/wanlongjs'
+// 以 cwd 为工程根（npm run 保证 cwd 是工程根）；以前写死作者机器的绝对路径，换机器就找不到帧目录。
+const ROOT = process.cwd()
 const FRAMES = join(ROOT, '.tplkit/frames')
 
 async function loadFrame(name: string): Promise<RawFrame> {

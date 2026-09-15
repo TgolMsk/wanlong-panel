@@ -31,6 +31,8 @@ export type ViewKey =
   | 'gatherConfig'
   /** 每日数据统计（features/stats，按北京日期分桶）。 */
   | 'stats'
+  /** AI 顾问：接口配置 + 处理记录（features/ai）。 */
+  | 'ai'
   | 'templates'
   | 'scripts'
   | 'accounts'
@@ -45,6 +47,7 @@ const VIEW_KEYS: readonly ViewKey[] = [
   'gatherOverview',
   'gatherConfig',
   'stats',
+  'ai',
   'templates',
   'scripts',
   'accounts',

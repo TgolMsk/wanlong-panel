@@ -18,6 +18,7 @@ import {
   ControlOutlined,
   FileTextOutlined,
   PictureOutlined,
+  RobotOutlined,
   SettingOutlined,
   ThunderboltOutlined,
   UserOutlined
@@ -38,6 +39,7 @@ import SettingsView from './views/SettingsView'
 import GatherOverviewView from './features/gather/GatherOverviewView'
 import GatherConfigView from './features/gather/GatherConfigView'
 import StatsView from './features/stats/StatsView'
+import { AiView } from './features/ai'
 
 const MENU_ITEMS: { key: ViewKey; icon: React.ReactNode; label: string }[] = [
   { key: 'instances', icon: <AppstoreOutlined />, label: '实例管理' },
@@ -45,6 +47,7 @@ const MENU_ITEMS: { key: ViewKey; icon: React.ReactNode; label: string }[] = [
   { key: 'gatherOverview', icon: <ClockCircleOutlined />, label: '采集总览' },
   { key: 'gatherConfig', icon: <ControlOutlined />, label: '采集配置' },
   { key: 'stats', icon: <BarChartOutlined />, label: '数据统计' },
+  { key: 'ai', icon: <RobotOutlined />, label: 'AI 处理' },
   { key: 'templates', icon: <PictureOutlined />, label: '模板库' },
   { key: 'scripts', icon: <FileTextOutlined />, label: '脚本' },
   { key: 'accounts', icon: <UserOutlined />, label: '账号' },
@@ -63,6 +66,8 @@ function CurrentView({ view }: { view: ViewKey }): React.JSX.Element {
       return <GatherConfigView />
     case 'stats':
       return <StatsView />
+    case 'ai':
+      return <AiView />
     case 'templates':
       return <TemplateEditor />
     case 'scripts':

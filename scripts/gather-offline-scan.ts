@@ -9,7 +9,8 @@ import { GatherSession, type GatherIo } from '@main/game/gather/session'
 import { normalizeGatherConfig } from '@main/game/gather/config'
 import { CARD, CREATE_TROOP, TROOP_PANEL, SEARCH_PANEL } from '@main/game/gather/geometry'
 
-const ROOT = '/Users/ws/Project/wanlongjs'
+// 以 cwd 为工程根（npm run 保证 cwd 是工程根）；以前写死作者机器的绝对路径，换机器就找不到帧目录。
+const ROOT = process.cwd()
 class StaticIo implements GatherIo {
   constructor(public raw: RawFrame) {}
   async capture(): Promise<RawFrame> {

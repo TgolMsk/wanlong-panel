@@ -1,11 +1,13 @@
 /**
- * 实例管理：MuMu 多实例的开关机、克隆、删除，以及 adb 链路的连接/断开。
+ * 实例管理：模拟器多实例（雷电 / MuMu）的开关机、克隆、删除，以及 adb 链路的连接/断开。
  *
  * 两条硬约束在这里体现：
  *  1. **并发上限**。实测单实例跑 Unity 游戏 45.7% CPU + 1.2GB RSS，本机 10 核 24GB，
  *     超过 4 个直接把 CPU 打满。已开机数达上限时「启动」按钮禁用并给出中文说明。
- *  2. **serial 只认 127.0.0.1:<adb_port>**，端口由 mumutool info 动态返回，界面上原样展示，
- *     不做任何「端口 = 16384 + index*32」这类推算。
+ *  2. **serial 只认 127.0.0.1:<adb_port>**，端口由驱动给出（MuMu 从 info 现读，雷电按 5555+2·序号），
+ *     界面上原样展示，渲染进程自己不做任何推算。
+ *  3. 雷电会报每个实例**配置**的分辨率，与参考分辨率不一致时在列表里标黄 —— 模板全部截自 2560×1440，
+ *     实例不是这个尺寸的话所有匹配都会错位。
  */
 
 import { useMemo, useState } from 'react'
@@ -75,7 +77,13 @@ export default function InstancesView(): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [configTarget, setConfigTarget] = useState<MumuInstance | null>(null)
-  const [configText, setConfigText] = useState('{\n  "vmCpuCount": 4\n}')
+  const isLd = settings.emulator === 'ldplayer'
+  /** Windows 版 MuMu（MuMuManager.exe）：配置键与雷电一样走 resolution / cpu / memory 这套友好键。 */
+  const isMumuWin = !isLd && (window.api?.env.platform ?? '') === 'win32'
+  const winDriver = isLd || isMumuWin
+  const [configText, setConfigText] = useState(() =>
+    winDriver ? '{\n  "resolution": "2560,1440,360"\n}' : '{\n  "vmCpuCount": 4\n}'
+  )
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const [createForm] = Form.useForm<CreateFormValues>()
 
@@ -227,6 +235,27 @@ export default function InstancesView(): React.JSX.Element {
         ) : (
           <Typography.Text type="secondary">未运行</Typography.Text>
         )
+    },
+    {
+      title: '分辨率',
+      key: 'resolution',
+      width: 150,
+      render: (_: unknown, r) => {
+        const res = r.resolution
+        if (!res) return <Typography.Text type="secondary">—</Typography.Text>
+        const text = `${res.width}×${res.height}${res.dpi ? `@${res.dpi}` : ''}`
+        const mismatch = res.width !== settings.refWidth || res.height !== settings.refHeight
+        if (!mismatch) return <span className="wl-mono">{text}</span>
+        return (
+          <Tooltip
+            title={`实例配置的分辨率与参考分辨率 ${settings.refWidth}×${settings.refHeight} 不一致，模板在它上面会整体错位。到雷电多开器里改成自定义 ${settings.refWidth}×${settings.refHeight}、DPI 360 后重启实例。`}
+          >
+            <span>
+              <SemanticTag tone="warning">{text} 不一致</SemanticTag>
+            </span>
+          </Tooltip>
+        )
+      }
     },
     {
       title: '绑定账号',
@@ -497,8 +526,11 @@ export default function InstancesView(): React.JSX.Element {
           pagination={false}
           scroll={{ x: 'max-content' }}
           locale={{
-            emptyText:
-              '还没有实例。点右上角「新建实例」创建，或确认 MuMu 模拟器已经启动、mumutool 路径正确（见「设置」页的环境自检）。'
+            emptyText: isLd
+              ? '还没有实例。点右上角「新建实例」创建，或确认雷电多开器里有实例、ldconsole.exe 路径正确（见「设置」页的环境自检）。'
+              : isMumuWin
+                ? '还没有实例。点右上角「新建实例」创建，或确认 MuMu 多开器里有实例、MuMuManager.exe 路径正确（见「设置」页的环境自检）。'
+                : '还没有实例。点右上角「新建实例」创建，或确认 MuMu 模拟器已经启动、mumutool 路径正确（见「设置」页的环境自检）。'
           }}
         />
       </GlassCard>
@@ -520,7 +552,19 @@ export default function InstancesView(): React.JSX.Element {
           style={{ marginBottom: 12 }}
           message={`每个新实例约占 ${(INSTANCE_DISK_COST_BYTES / GB).toFixed(1)} GB 磁盘，创建过程可能持续数分钟。`}
         />
-        <Form form={createForm} layout="vertical" initialValues={{ count: 1, type: 'phone' }}>
+        <Form
+          form={createForm}
+          layout="vertical"
+          // 雷电 add 出来的实例默认 1280×720@280、MuMu 新建的也不一定是 2560×1440，与模板不匹配，
+          // 所以 Windows 两家驱动默认都把参考分辨率填上。
+          initialValues={{
+            count: 1,
+            type: 'phone',
+            extra: winDriver
+              ? `{\n  "resolution": "${settings.refWidth},${settings.refHeight},360"\n}`
+              : undefined
+          }}
+        >
           <Form.Item
             name="count"
             label="数量"
@@ -528,20 +572,37 @@ export default function InstancesView(): React.JSX.Element {
           >
             <InputNumber min={1} max={8} style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item name="type" label="机型">
-            <Select
-              options={[
-                { value: 'phone', label: '手机' },
-                { value: 'tablet', label: '平板' }
-              ]}
-            />
-          </Form.Item>
+          {!winDriver && (
+            <Form.Item name="type" label="机型">
+              <Select
+                options={[
+                  { value: 'phone', label: '手机' },
+                  { value: 'tablet', label: '平板' }
+                ]}
+              />
+            </Form.Item>
+          )}
           <Form.Item
             name="extra"
-            label="高级配置（可选，JSON，透传给 mumutool create -s）"
-            extra='例如 {"vmCpuCount": 4, "vmMemory": 4096}。留空则用 MuMu 默认值。'
+            label={
+              isLd
+                ? '高级配置（可选，JSON，建完交给 ldconsole modify）'
+                : isMumuWin
+                  ? '高级配置（可选，JSON，建完交给 MuMuManager setting）'
+                  : '高级配置（可选，JSON，透传给 mumutool create -s）'
+            }
+            extra={
+              isLd
+                ? '例如 {"resolution": "2560,1440,360", "cpu": 4, "memory": 4096}。留空则用雷电默认值（通常是 1920×1080，与本工程模板不匹配）。'
+                : isMumuWin
+                  ? '例如 {"resolution": "2560,1440,360", "cpu": 4, "memory": 4096}。留空则用 MuMu 默认值（不一定是 2560×1440，与本工程模板不匹配）。'
+                  : '例如 {"vmCpuCount": 4, "vmMemory": 4096}。留空则用 MuMu 默认值。'
+            }
           >
-            <Input.TextArea rows={4} placeholder='{"vmCpuCount": 4}' />
+            <Input.TextArea
+              rows={4}
+              placeholder={winDriver ? '{"resolution": "2560,1440,360"}' : '{"vmCpuCount": 4}'}
+            />
           </Form.Item>
         </Form>
       </Modal>
@@ -556,13 +617,35 @@ export default function InstancesView(): React.JSX.Element {
         onCancel={() => setConfigTarget(null)}
         destroyOnHidden
       >
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="只支持写入，不支持读回"
-          description="Mac 版 mumutool 的配置读取接口是坏的，这里只把 JSON 透传给 mumutool config -s。写错的键会被 MuMu 忽略，不会有回显。"
-        />
+        {isLd ? (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="写入后要重启实例才生效"
+            description={
+              '键名与 ldconsole modify 的参数一一对应：resolution（"宽,高,DPI"）/ cpu / memory / manufacturer / model / pnumber / imei / imsi / simserial / androidid / mac / autorotate / lockwindow / root。不认识的键会直接报错，不会静默忽略。'
+            }
+          />
+        ) : isMumuWin ? (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="写入后要重启实例才生效"
+            description={
+              '友好键：resolution（"宽,高,DPI"）/ cpu / memory（MB）/ manufacturer / model / pnumber / imei / autorotate / lockwindow / root；也可以直接写 MuMuManager setting 的原始键（如 "performance_mode": "high"）。不认识的键会直接报错。'
+            }
+          />
+        ) : (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="只支持写入，不支持读回"
+            description="Mac 版 mumutool 的配置读取接口是坏的，这里只把 JSON 透传给 mumutool config -s。写错的键会被 MuMu 忽略，不会有回显。"
+          />
+        )}
         <Input.TextArea
           rows={8}
           value={configText}
