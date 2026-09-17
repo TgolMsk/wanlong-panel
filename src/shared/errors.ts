@@ -36,6 +36,9 @@ export const ERROR_CODES = [
   'CAPTURE_BAD_FRAME',
   /** 设备尚未开机完成（sys.boot_completed != 1） */
   'DEVICE_NOT_READY',
+  /** 游戏资源更新未完成或遇到未校准的更新提示，需要人工处理。 */
+  'GAME_UPDATE_REQUIRED',
+  'AI_RISK_BLOCKED',
 
   // ── 视觉 ──
   /** 模板方差过低，TM_CCOEFF_NORMED 会退化，必须拒绝 */

@@ -2,7 +2,7 @@
  * AI 顾问模块出口（主进程）。
  *
  *   advisor.ts  配置 / 限频 / 两阶段问询 / 记录          —— 只出主意
- *   recover.ts  执行白名单点击 / 复验 / 自学模板 / 记录   —— 只动手
+ *   recover.ts  风险审核 / 点击 / 复验 / 自学关闭模板 / 记录
  *   harvest.ts  把关闭按钮裁成模板存进模板库
  *   client.ts   OpenAI 兼容视觉接口 + 视觉能力探测
  *   store.ts    <dataDir>/ai.json

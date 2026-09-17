@@ -111,7 +111,7 @@ export interface SchedulerDeps {
     instanceIndex: number,
     raw: RawFrame,
     signal?: AbortSignal
-  ): Promise<boolean | 'recovered' | void>
+  ): Promise<boolean | 'recovered' | 'updated' | void>
   /**
    * 健康探针：到点截一帧（不开面板）交给上层，附带前台包名与游戏进程存活情况。
    * 同样在实例锁内，同样不得 await 调度器方法。
@@ -615,7 +615,11 @@ class SchedulerImpl {
       await this.persist()
       // 「实例上有脚本在跑」是正常让路，不是故障 —— 不能计进掉线计数。
       // （它其实在进 try 之前就抛了，这里再挡一道，免得将来有人挪动那段代码。）
-      if (err.code !== 'CONCURRENCY_LIMIT') {
+      if (
+        err.code !== 'CONCURRENCY_LIMIT' &&
+        err.code !== 'GAME_UPDATE_REQUIRED' &&
+        err.code !== 'AI_RISK_BLOCKED'
+      ) {
         this.notifySampleResult(instanceIndex, false, err.message)
       }
       throw err

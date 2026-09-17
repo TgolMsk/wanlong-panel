@@ -129,7 +129,13 @@ import {
 } from '@main/game/gatherRunner'
 
 // ── AI 顾问：认不出界面时问视觉大模型，点掉弹窗并把关闭按钮自学成模板 ──────
-import { aiRecoverUnknownScreen, getAiAdvisor, type RecoverIo } from '@main/ai/index'
+import {
+  aiRecoverUnknownScreen,
+  getAiAdvisor,
+  type RecoverIo,
+  type RecoverContext
+} from '@main/ai/index'
+import { GameUpdateRecovery, type UpdateContext } from '@main/game/update'
 import { emitAi, registerAiHandlers, resetAiIpc } from '@main/ai/ipc'
 import {
   closePopupTemplates,
@@ -466,41 +472,115 @@ const notifyHub = getNotifyHub()
 const alertCenter = getAlertCenter()
 /** AI 顾问：只在认不出界面时被问到；关掉或没配 Key 时 isActive() 为 false，一切照旧。 */
 const aiAdvisor = getAiAdvisor()
+const gameUpdateRecovery = new GameUpdateRecovery(() => paths().resourcesDir)
+
+/** 两条自动化链路共用更新处理；更新阻塞单独告警，不累计为设备掉线。 */
+async function recoverUnknownWithUpdate(
+  ctx: RecoverContext,
+  foreground: () => Promise<string | null>,
+  check: () => void
+): Promise<false | 'recovered' | 'updated'> {
+  const consult = async (raw: RawFrame, waiting = false) => {
+    check()
+    if (!aiAdvisor.isActive()) return null
+    const r = await aiRecoverUnknownScreen(aiAdvisor, {
+      ...ctx,
+      raw,
+      checkAlive: check,
+      foregroundPackage: foreground,
+      allowUpdateConfirm: !waiting
+    })
+    check()
+    if (r.requiresAttention) throw new AppError('AI_RISK_BLOCKED', r.message)
+    return r
+  }
+  try {
+    const updateContext: UpdateContext = {
+      raw: ctx.raw,
+      refWidth: ctx.refWidth,
+      refHeight: ctx.refHeight,
+      io: {
+        capture: () => ctx.io.capture(),
+        tap: (x, y) => ctx.io.tap(x, y),
+        foregroundPackage: foreground
+      },
+      check,
+      recognize: ctx.recognize ?? (async () => false),
+      recoverOverlay: async (raw) => (await consult(raw, true))?.handled ?? false,
+      log: (message) => ctx.log('info', `[游戏更新] ${message}`)
+    }
+    if (await gameUpdateRecovery.handle(updateContext)) return 'updated'
+    const r = await consult(ctx.raw)
+    if (
+      r?.advice?.risk?.effect === 'download_update' &&
+      ((r.handled && (r.outcome === 'applied' || r.outcome === 'verified')) ||
+        r.advice.action === 'none')
+    ) {
+      await gameUpdateRecovery.wait(updateContext)
+      return 'updated'
+    }
+    return r?.handled ? 'recovered' : false
+  } catch (e) {
+    check()
+    if (
+      ['GAME_UPDATE_REQUIRED', 'AI_RISK_BLOCKED'].includes(AppError.from(e).code) &&
+      ctx.instanceIndex !== null &&
+      !alertCenter.isPaused(ctx.instanceIndex)
+    ) {
+      await alertCenter.raise(
+        makeAlertEvent({
+          type: 'needsAttention',
+          instanceIndex: ctx.instanceIndex,
+          at: Date.now(),
+          reason: AppError.from(e).message,
+          shotPath: null,
+          detail: {
+            阶段: AppError.from(e).code === 'AI_RISK_BLOCKED' ? 'AI 操作风险评估' : '游戏资源更新',
+            自动操作: '已停止，处理后可恢复'
+          }
+        })
+      )
+    }
+    throw e
+  }
+}
 
 /**
  * 采集流程（G0 兜底阶梯）用的顾问端口：把 gather 模块的上下文原样交给 recover.ts。
- * 它只会执行「点关闭 / 点取消」并复验；back / none 交回 navigation.ts 自己的 BACK 阶梯。
+ * 点击前评估风险，低风险确认需二次复核；存在风险时暂停，不继续 BACK 阶梯。
  */
 const gatherAdvisor: UnknownScreenAdvisor = {
   handleUnknownScreen: async (ctx) => {
-    if (!aiAdvisor.isActive()) return false
-    const r = await aiRecoverUnknownScreen(aiAdvisor, {
-      instanceIndex: ctx.instanceIndex,
-      context: 'gather-g0',
-      raw: ctx.raw,
-      io: ctx.io,
-      refWidth: ctx.refWidth,
-      refHeight: ctx.refHeight,
-      setId: ctx.setId,
-      attempt: ctx.attempt,
-      recognize: ctx.recognize,
-      existingCloseTemplates: ctx.existingCloseTemplates,
-      log: ctx.log
-    })
-    return r.handled
+    const r = await recoverUnknownWithUpdate(
+      {
+        instanceIndex: ctx.instanceIndex,
+        context: 'gather-g0',
+        raw: ctx.raw,
+        io: ctx.io,
+        refWidth: ctx.refWidth,
+        refHeight: ctx.refHeight,
+        setId: ctx.setId,
+        attempt: ctx.attempt,
+        recognize: ctx.recognize,
+        existingCloseTemplates: ctx.existingCloseTemplates,
+        log: ctx.log
+      },
+      () => ctx.io.foregroundPackage(),
+      () => ctx.checkAlive?.()
+    )
+    return r !== false
   }
 }
 
 /**
  * 调度器采样时的 AI 恢复：采样器认不出界面、顶号探针也没命中时调用。
- * 返回 'recovered' 让采样器重新截图（不按 BACK）；false 让它按原阶梯继续。绝不抛。
+ * 返回 'recovered' 让采样器重新截图，'updated' 延长更新后的采样时间；风险或更新阻塞会向上传递。
  */
 async function aiRecoverForScheduler(
   index: number,
   raw: RawFrame,
   signal?: AbortSignal
-): Promise<false | 'recovered'> {
-  if (!aiAdvisor.isActive()) return false
+): Promise<false | 'recovered' | 'updated'> {
   try {
     const dev = await ensureDevice(deps, index)
     const templates = await getGatherTemplates(paths().templatesDir, (l, m, d) =>
@@ -521,25 +601,31 @@ async function aiRecoverForScheduler(
         return adbKey(dev.serial, k)
       }
     }
-    const r = await aiRecoverUnknownScreen(aiAdvisor, {
-      instanceIndex: index,
-      context: 'scheduler-sample',
-      raw,
-      io,
-      refWidth: templates.refWidth,
-      refHeight: templates.refHeight,
-      setId: templates.setId,
-      attempt: 1,
-      recognize: (f) =>
-        isRecognizableScreen(templates, f, {
-          refWidth: templates.refWidth,
-          refHeight: templates.refHeight
-        }),
-      existingCloseTemplates: closePopupTemplates(templates),
-      log: (l, m, d) => alertLog(l, `[实例${index}][AI] ${m}`, d)
-    })
-    return r.handled ? 'recovered' : false
+    const r = await recoverUnknownWithUpdate(
+      {
+        instanceIndex: index,
+        context: 'scheduler-sample',
+        raw,
+        io,
+        refWidth: templates.refWidth,
+        refHeight: templates.refHeight,
+        setId: templates.setId,
+        attempt: 1,
+        recognize: (f) =>
+          isRecognizableScreen(templates, f, {
+            refWidth: templates.refWidth,
+            refHeight: templates.refHeight
+          }),
+        existingCloseTemplates: closePopupTemplates(templates),
+        log: (l, m, d) => alertLog(l, `[实例${index}][AI] ${m}`, d)
+      },
+      () => foregroundPackage(dev.serial),
+      () => signal?.throwIfAborted()
+    )
+    return r
   } catch (e) {
+    if (['GAME_UPDATE_REQUIRED', 'AI_RISK_BLOCKED'].includes(AppError.from(e).code)) throw e
+    signal?.throwIfAborted()
     alertLog(
       'warn',
       `[实例${index}] AI 顾问在采样链路上出错，按未处理继续：${AppError.from(e).message}`
@@ -826,6 +912,7 @@ function gatherRunnerDeps(): GatherRunnerDeps {
     // ★ 这里是在调度器的实例锁内跑的：raise() 内部只会调 setAuto(false)（不抢锁），安全；
     //   绝不能在这条路上 await sampleNow / setAuto(true)，那会死锁。
     onCycleResult: async (index, fact) => {
+      if (fact.errorCode === 'GAME_UPDATE_REQUIRED' || fact.errorCode === 'AI_RISK_BLOCKED') return // 处理器已给出专用告警。
       // 数据统计：失败轮数 / 熔断次数。record 是同步且绝不抛的。
       if (fact.outcome === 'error' || fact.outcome === 'circuitBroken') {
         statsCenter.record({

@@ -1,13 +1,12 @@
 /**
- * 认不出界面时的 AI 恢复流程：问 → 只执行白名单里的点击 → 复验 → 自学模板 → 记录。
+ * 认不出界面时的 AI 恢复流程：识别 → 评估操作风险 → 点击并复验 → 学习关闭模板 → 记录。
  *
  * 采集流程（navigation.ts 的 ensureWorldMap）与调度器采样（scheduler/troopPanel.ts 的 ensurePanelOpen）
  * 在「盲按 BACK 之前」各插一次本函数。返回 handled=true 表示画面已经被改变、调用方应重新截图再判；
- * false 表示什么都没做（或做了没用），调用方按原来的阶梯继续 —— 安全逻辑（BACK 之后必须取消退出框等）
- * 仍然只写在调用方那一份里。
+ * requiresAttention 表示需暂停并交给用户处理，不能继续 BACK 阶梯；画面过期时 handled=true 仅要求重新截图。
  *
  * ★ 三条安全边界：
- *   1. 只执行 tap_close / tap_cancel；back / none 一律不执行（交回调用方）。
+ *   1. 点击需通过风险评估；确认动作还需新截图二次评估和重复执行保护。
  *   2. 点完必须复验：画面没变 ⇒ 当没发生；
  *   3. 只在「点完回到了已知界面」时才裁模板 —— 画面变了但仍认不出，说明关掉的可能不是弹窗
  *      （或底下还有一层），这种情况学到的模板是不可信的。
@@ -23,6 +22,8 @@ import type { PreparedTemplate, RawFrame } from '@shared/vision'
 import { matchIn, prepareFrame } from '@vision/index'
 import type { AiAdvisor } from './advisor'
 import { harvestCloseButton } from './harvest'
+import { riskRejection, isLowEffect } from './risk'
+import { GAME_PACKAGE } from '@main/game/gather/geometry'
 
 export interface RecoverIo {
   capture(): Promise<RawFrame>
@@ -38,6 +39,10 @@ export type RecoverLogger = (
 ) => void
 
 export interface RecoverContext {
+  checkAlive?: () => void
+  foregroundPackage?: () => Promise<string | null>
+  /** 更新已经开始时，不再确认第二次更新。 */
+  allowUpdateConfirm?: boolean
   instanceIndex: number | null
   /** gather-g0 / scheduler-sample。 */
   context: string
@@ -62,6 +67,7 @@ export interface RecoverResult {
   harvestedTemplateId: string | null
   outcome: AiConsultOutcome
   message: string
+  requiresAttention?: boolean
 }
 
 /** 点击后等画面稳定的时间。 */
@@ -75,12 +81,14 @@ export async function aiRecoverUnknownScreen(
   ctx: RecoverContext
 ): Promise<RecoverResult> {
   const t0 = Date.now()
+  let pendingAdvice: AiAdvice | null = null
   const finish = (
     outcome: AiConsultOutcome,
     message: string,
     advice: AiAdvice | null,
     harvestedTemplateId: string | null,
-    handled: boolean
+    handled: boolean,
+    requiresAttention = false
   ): RecoverResult => {
     advisor.note({
       instanceIndex: ctx.instanceIndex,
@@ -92,10 +100,11 @@ export async function aiRecoverUnknownScreen(
       latencyMs: Date.now() - t0
     })
     ctx.log(handled ? 'info' : 'warn', `AI 顾问：${message}`, { outcome, handled })
-    return { handled, advice, harvestedTemplateId, outcome, message }
+    return { handled, advice, harvestedTemplateId, outcome, message, requiresAttention }
   }
 
   try {
+    ctx.checkAlive?.()
     const c = await advisor.consult({
       instanceIndex: ctx.instanceIndex,
       context: ctx.context,
@@ -118,10 +127,27 @@ export async function aiRecoverUnknownScreen(
       }
       return finish(c.outcome, c.reason, null, null, false)
     }
-    const advice = c.advice
+    let advice = c.advice
+    pendingAdvice = advice
     const cfg = advisor.currentConfig()
+    ctx.checkAlive?.()
 
     if (advice.action === 'back' || advice.action === 'none') {
+      if (
+        advice.risk &&
+        (advice.risk.level !== 'low' ||
+          advice.risk.hazards.length ||
+          !isLowEffect(advice.risk.effect))
+      ) {
+        return finish(
+          'rejected',
+          `风险判断未通过：${advice.risk.reason || '风险不明'}，停止自动处理。`,
+          advice,
+          null,
+          false,
+          true
+        )
+      }
       return finish(
         'no_action',
         `模型判断当前是「${advice.screen}」，建议「${AI_ACTION_LABEL[advice.action]}」，交回兜底阶梯处理（${advice.reason}）。`,
@@ -130,21 +156,114 @@ export async function aiRecoverUnknownScreen(
         false
       )
     }
+    const rejectedRisk = riskRejection(advice)
+    if (rejectedRisk) return finish('rejected', rejectedRisk, advice, null, false, true)
+    if (ctx.allowUpdateConfirm === false && advice.risk?.effect === 'download_update') {
+      return finish('no_action', '资源更新已开始，继续等待，不重复确认下载。', advice, null, false)
+    }
     if (!advice.target) {
       return finish('rejected', '模型建议点击但没有给出目标框，不执行。', advice, null, false)
     }
-    if (advice.confidence < cfg.minConfidence) {
+    const minConfidence =
+      advice.action === 'tap_confirm' ? Math.max(0.85, cfg.minConfidence) : cfg.minConfidence
+    if (advice.confidence < minConfidence) {
       return finish(
         'rejected',
-        `模型置信度 ${advice.confidence.toFixed(2)} 低于阈值 ${cfg.minConfidence}，不执行「${AI_ACTION_LABEL[advice.action]}」。`,
+        `模型置信度 ${advice.confidence.toFixed(2)} 低于阈值 ${minConfidence}，不执行「${AI_ACTION_LABEL[advice.action]}」。`,
         advice,
         null,
-        false
+        false,
+        advice.action === 'tap_confirm'
+      )
+    }
+
+    const checkForeground = async (): Promise<boolean> => {
+      ctx.checkAlive?.()
+      if (!ctx.foregroundPackage) return advice.action !== 'tap_confirm'
+      const ok = (await ctx.foregroundPackage()) === GAME_PACKAGE
+      ctx.checkAlive?.()
+      return ok
+    }
+    if (!(await checkForeground()))
+      return finish('rejected', '无法确认游戏仍在前台，已停止点击。', advice, null, false, true)
+    let clickFrame = await ctx.io.capture()
+    ctx.checkAlive?.()
+    if (advice.action === 'tap_confirm') {
+      const original = advice
+      const second = await advisor.consult({
+        instanceIndex: ctx.instanceIndex,
+        context: ctx.context,
+        raw: clickFrame,
+        refWidth: ctx.refWidth,
+        refHeight: ctx.refHeight,
+        attempt: ctx.attempt,
+        recheck: true
+      })
+      ctx.checkAlive?.()
+      if (!second.advice)
+        return finish(
+          'rejected',
+          `点击前风险复核未完成：${second.reason}`,
+          original,
+          null,
+          false,
+          true
+        )
+      advice = { ...second.advice, riskRechecked: true }
+      pendingAdvice = advice
+      const secondRisk = riskRejection(advice)
+      if (
+        secondRisk ||
+        advice.action !== 'tap_confirm' ||
+        advice.confidence < minConfidence ||
+        advice.risk?.effect !== original.risk?.effect ||
+        advice.risk?.buttonText.replace(/\s/g, '') !== original.risk?.buttonText.replace(/\s/g, '')
+      ) {
+        return finish(
+          'rejected',
+          `点击前复核未通过：${secondRisk ?? '按钮、后果或置信度发生变化'}。`,
+          advice,
+          null,
+          false,
+          true
+        )
+      }
+      const latest = await ctx.io.capture()
+      ctx.checkAlive?.()
+      if (
+        !advice.target ||
+        !(await stableTarget(clickFrame, latest, advice.target, ctx.refWidth, ctx.refHeight))
+      ) {
+        return finish('rejected', '复核后画面发生变化，本次未点击，重新判断。', advice, null, true)
+      }
+      clickFrame = latest
+    } else if (
+      !(await stableTarget(ctx.raw, clickFrame, advice.target, ctx.refWidth, ctx.refHeight))
+    ) {
+      return finish(
+        'rejected',
+        '等待模型回复期间目标发生变化，本次未点击，重新判断。',
+        advice,
+        null,
+        true
+      )
+    }
+    if (!(await checkForeground()))
+      return finish('rejected', '点击前前台已变化，停止操作。', advice, null, false, true)
+    ctx.checkAlive?.()
+    if (advice.action === 'tap_confirm' && !advisor.claimConfirmation(ctx.instanceIndex, advice)) {
+      return finish(
+        'rejected',
+        '60 秒内已执行过相同确认，停止重复点击，请检查当前进度。',
+        advice,
+        null,
+        false,
+        true
       )
     }
 
     // ── 执行 ──
-    const box = advice.target
+    const box = advice.target!
     const cx = Math.round(box.x + box.w / 2)
     const cy = Math.round(box.y + box.h / 2)
     ctx.log(
@@ -156,7 +275,7 @@ export async function aiRecoverUnknownScreen(
     const after = await ctx.io.capture()
 
     // ── 复验 ──
-    const diff = await meanAbsDiff(ctx.raw, after, ctx.refWidth, ctx.refHeight)
+    const diff = await meanAbsDiff(clickFrame, after, ctx.refWidth, ctx.refHeight)
     const changed = diff >= CHANGED_THRESHOLD
     let recognized = false
     if (ctx.recognize) {
@@ -172,7 +291,8 @@ export async function aiRecoverUnknownScreen(
         `点了 (${cx},${cy}) 之后画面没有变化（差异 ${diff.toFixed(1)}），判定无效，交回兜底阶梯。`,
         advice,
         null,
-        false
+        false,
+        advice.action === 'tap_confirm'
       )
     }
     if (!recognized) {
@@ -235,8 +355,43 @@ export async function aiRecoverUnknownScreen(
     )
   } catch (e) {
     const msg = `AI 恢复流程出错：${AppError.from(e).message}`
-    return finish('failed', msg, null, null, false)
+    return finish(
+      'failed',
+      msg,
+      pendingAdvice,
+      null,
+      false,
+      pendingAdvice?.action === 'tap_confirm'
+    )
   }
+}
+
+/** 比较按钮与周边上下文，避免模型请求期间切屏后误点旧坐标。 */
+export async function stableTarget(
+  a: RawFrame,
+  b: RawFrame,
+  box: { x: number; y: number; w: number; h: number },
+  refW: number,
+  refH: number
+): Promise<boolean> {
+  if (a.width !== b.width || a.height !== b.height) return false
+  const pa = await prepareFrame(a, { refW, refH, shrink: 2 })
+  const pb = await prepareFrame(b, { refW, refH, shrink: 2 })
+  const left = Math.max(0, Math.floor((box.x - 160) / 2))
+  const top = Math.max(0, Math.floor((box.y - 240) / 2))
+  const right = Math.min(pa.w, Math.ceil((box.x + box.w + 160) / 2))
+  const bottom = Math.min(pa.h, Math.ceil((box.y + box.h + 80) / 2))
+  let changed = 0,
+    sum = 0,
+    n = 0
+  for (let y = top; y < bottom; y++)
+    for (let x = left; x < right; x++) {
+      const d = Math.abs(pa.gray[y * pa.w + x]! - pb.gray[y * pb.w + x]!)
+      sum += d
+      if (d > 20) changed++
+      n++
+    }
+  return n > 0 && sum / n < 3 && changed / n < 0.015
 }
 
 /** 已有的关闭按钮模板能不能在点击前那一帧的目标区域里认出这个 ×。能 ⇒ 不用再学。 */

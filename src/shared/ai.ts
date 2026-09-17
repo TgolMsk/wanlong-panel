@@ -10,8 +10,8 @@
  *
  * 本模块把「认不出」这一格交给视觉大模型（OpenAI 兼容接口，任何支持图片输入的模型都行）：
  *   1. 把当前截图缩到 imageWidth 宽发过去，让模型**分类**当前界面并从**动作白名单**里选一个；
- *   2. 只有「点关闭按钮」「点取消」两种动作会被执行，坐标由模型给出边界框，可选做第二阶段
- *      局部放大精定位；「按返回」「不动」一律交回原来的兜底阶梯（安全逻辑只有一份）；
+ *   2. 根据点击后果评估风险，低风险关闭/取消/确认可执行；确认需用新截图再次评估。
+ *      风险不明或较高时暂停，不能继续用 BACK 绕过决定；
  *   3. 点完必须复验（画面变了 / 已回到已知界面），不通过就当没发生；
  *   4. ★ 自学习：确认是关闭按钮且关掉后回到了已知界面，就把点击前那一帧里的按钮裁成模板
  *      存进模板库（tpl_btn_close_popup 或 _ai<N> 变体）。下次同样的弹窗 1ms 本地解决，不再问。
@@ -212,6 +212,7 @@ export const AI_SCREEN_KINDS = [
   'kicked',
   'network',
   'maintenance',
+  'update',
   'loading',
   'other',
   'unknown'
@@ -227,22 +228,24 @@ export const AI_SCREEN_LABEL: Record<AiScreenKind, string> = {
   kicked: '顶号/登录界面',
   network: '网络断开提示',
   maintenance: '维护/更新公告',
+  update: '游戏资源更新',
   loading: '加载中',
   other: '其它二级页',
   unknown: '看不出来'
 }
 
 /**
- * ★ 动作白名单。模型只能从这里选，**没有**「确定」「派兵」「购买」这类动作，永远不会有。
- *   tap_close / tap_cancel 需要模型给出目标边界框，由本地点击并复验；
+ * 动作类型不直接代表风险；tap_confirm 根据后果、风险等级和二次评估决定是否执行。
+ *   所有 tap 动作需要风险评估和目标边界框，由本地点击并复验；
  *   back / none 不由 AI 执行 —— 交回原来的兜底阶梯（安全逻辑只写一份）。
  */
-export const AI_ACTIONS = ['tap_close', 'tap_cancel', 'back', 'none'] as const
+export const AI_ACTIONS = ['tap_close', 'tap_cancel', 'tap_confirm', 'back', 'none'] as const
 export type AiAction = (typeof AI_ACTIONS)[number]
 
 export const AI_ACTION_LABEL: Record<AiAction, string> = {
   tap_close: '点关闭按钮（×）',
   tap_cancel: '点「取消」',
+  tap_confirm: '点确认/继续/重试',
   back: '按返回键',
   none: '不动'
 }
@@ -253,6 +256,43 @@ export interface AiBox {
   y: number
   w: number
   h: number
+}
+
+export const AI_RISK_LEVELS = ['low', 'medium', 'high', 'unknown'] as const
+export type AiRiskLevel = (typeof AI_RISK_LEVELS)[number]
+export const AI_RISK_LABEL: Record<AiRiskLevel, string> = {
+  low: '低风险',
+  medium: '中风险',
+  high: '高风险',
+  unknown: '风险不明'
+}
+export const AI_EFFECTS = [
+  'dismiss',
+  'acknowledge',
+  'retry_connection',
+  'continue_loading',
+  'download_update',
+  'navigate',
+  'purchase',
+  'spend_resource',
+  'delete',
+  'account_change',
+  'permission_change',
+  'send_message',
+  'combat',
+  'exit_game',
+  'unknown'
+] as const
+export type AiEffect = (typeof AI_EFFECTS)[number]
+export interface AiRiskAssessment {
+  level: AiRiskLevel
+  effect: AiEffect
+  buttonText: string
+  dialogText: string
+  consequence: string
+  reason: string
+  /** 可能产生的不利后果；无风险时明确返回空数组，缺失不视为无风险。 */
+  hazards: string[]
 }
 
 export interface AiAdvice {
@@ -268,6 +308,9 @@ export interface AiAdvice {
   latencyMs: number
   /** 是否经过第二阶段放大精定位。 */
   refined: boolean
+  /** 旧历史没有此字段；不得将缺失的评估视为低风险。 */
+  risk?: AiRiskAssessment
+  riskRechecked?: boolean
 }
 
 // ── 记录 / 状态 ───────────────────────────────────────────────────────────

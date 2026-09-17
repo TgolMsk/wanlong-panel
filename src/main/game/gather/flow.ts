@@ -283,7 +283,8 @@ export async function runGatherCycle(opts: RunGatherCycleOptions): Promise<Gathe
 
   // 收尾：尽量把游戏留在世界地图（失败不影响结果）。
   try {
-    await closeTroopPanel(s)
+    if (error?.code !== 'GAME_UPDATE_REQUIRED' && error?.code !== 'AI_RISK_BLOCKED')
+      await closeTroopPanel(s)
   } catch {
     // 收尾动作失败无所谓，下一轮的 G0 会把界面拉回来。
   }

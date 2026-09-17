@@ -11,6 +11,7 @@ import {
   AI_ACTION_LABEL,
   AI_OUTCOME_LABEL,
   AI_SCREEN_LABEL,
+  AI_RISK_LABEL,
   type AiConsultRecord
 } from '@shared/ai'
 import { formatCst } from '@shared/alerts'
@@ -83,6 +84,27 @@ export default function AiView(): React.JSX.Element {
           </span>
         ) : (
           <Typography.Text type="secondary">—</Typography.Text>
+        )
+    },
+    {
+      title: '风险评估',
+      key: 'risk',
+      width: 240,
+      render: (_: unknown, r) =>
+        r.advice?.risk ? (
+          <Tooltip
+            title={`${r.advice.risk.reason}；点击后：${r.advice.risk.consequence}；依据：${r.advice.risk.dialogText}`}
+          >
+            <span>
+              <Tag color={r.advice.risk.level === 'low' ? 'success' : 'warning'}>
+                {AI_RISK_LABEL[r.advice.risk.level] ?? '风险不明'}
+              </Tag>
+              {r.advice.risk.buttonText || '无点击'}
+              {r.advice.riskRechecked ? ' · 已复核' : ''}
+            </span>
+          </Tooltip>
+        ) : (
+          <Typography.Text type="secondary">未评估（旧记录）</Typography.Text>
         )
     },
     {

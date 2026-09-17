@@ -129,7 +129,7 @@ export interface SampleIo {
    * 返回 'recovered' 表示上层（AI 顾问）已经把盖住画面的东西点掉了，采样器应重新截图再判、不要按 BACK。
    * 实现方不得抛异常（抛了也会被吞、按未命中处理）。
    */
-  onUnrecognized?: (raw: RawFrame) => Promise<boolean | 'recovered' | void>
+  onUnrecognized?: (raw: RawFrame) => Promise<boolean | 'recovered' | 'updated' | void>
   /**
    * 冷启动恢复：确认游戏在前台，不在就拉起来（实现见 `src/main/game/launch.ts`）。
    *
@@ -402,7 +402,15 @@ async function ensurePanelOpen(
     // 第三轮起先把这一帧交给上层探针（顶号 / 断网弹窗 / AI 顾问）。
     //   true       ⇒ 顶号探针命中，告警中心已接管，别再折腾；
     //   'recovered' ⇒ AI 顾问已把盖住画面的东西点掉并复验过，重新截图再判（不要按 BACK）。
+    const probeStarted = Date.now()
     const probe = await probeUnrecognized(io, frame.raw)
+    if (probe === 'updated') {
+      // 下载等待不消耗普通采样时限，并为更新后的公告/导航保留完整预算。
+      opts.deadlineAt = Math.max(opts.deadlineAt + Date.now() - probeStarted, Date.now() + 60_000)
+      maxAttempts = Math.max(maxAttempts, attempt + 5)
+      io.log?.('info', '游戏更新已完成，重新截图并继续采样。')
+      continue
+    }
     if (probe === true) {
       throw new AppError(
         'NOT_FOUND',
@@ -475,12 +483,18 @@ async function firstHit(
 }
 
 /** 把帧交给上层探针；探针没配 / 抛异常都按「未命中」处理。 */
-async function probeUnrecognized(io: SampleIo, raw: RawFrame): Promise<boolean | 'recovered'> {
+async function probeUnrecognized(
+  io: SampleIo,
+  raw: RawFrame
+): Promise<boolean | 'recovered' | 'updated'> {
   if (!io.onUnrecognized) return false
   try {
     const r = await io.onUnrecognized(raw)
-    return r === true ? true : r === 'recovered' ? 'recovered' : false
-  } catch {
+    return r === true ? true : r === 'recovered' || r === 'updated' ? r : false
+  } catch (e) {
+    const code = AppError.from(e).code
+    if (code === 'GAME_UPDATE_REQUIRED' || code === 'AI_RISK_BLOCKED' || code === 'RUN_ABORTED')
+      throw e
     // 探针自己的问题不能拖垮采样流程的错误语义。
     return false
   }

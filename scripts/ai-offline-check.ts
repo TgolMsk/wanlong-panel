@@ -196,7 +196,7 @@ function makeIo(
   return {
     taps,
     keys,
-    capture: async () => after(),
+    capture: async () => (taps.length ? after() : makeFrame(true)),
     tap: async (x, y) => {
       taps.push([x, y])
     },
@@ -464,7 +464,7 @@ async function checkProbe(): Promise<void> {
 async function checkParse(): Promise<void> {
   section('四、回复解析')
   const p1 = parseAdvice(
-    '```json\n{"screen":"popup","action":"tap_close","target":{"x":10,"y":20,"w":40,"h":40},"confidence":0.9,"reason":"有×"}\n```',
+    '```json\n{"screen":"popup","action":"tap_close","risk":{"level":"low","effect":"dismiss","buttonText":"关闭","dialogText":"活动公告，右上角关闭","consequence":"关闭覆盖层回到游戏","reason":"不会付费或改变账号数据","hazards":[]},"target":{"x":10,"y":20,"w":40,"h":40},"confidence":0.9,"reason":"有×"}\n```',
     1280,
     720
   )
@@ -486,19 +486,19 @@ async function checkParse(): Promise<void> {
     p2.ok && p2.target?.w === 50 && p2.target?.h === 40 && p2.confidence === 0.8
   )
   const p3 = parseAdvice(
-    '{"screen":"popup","action":"tap_confirm","target":{"x":1,"y":1,"w":40,"h":40},"confidence":1}',
+    '{"screen":"popup","action":"tap_purchase","target":{"x":1,"y":1,"w":40,"h":40},"confidence":1}',
     1280,
     720
   )
   ok('白名单外的动作被拒', !p3.ok)
   const p4 = parseAdvice(
-    '{"screen":"popup","action":"tap_close","target":null,"confidence":1}',
+    '{"screen":"popup","action":"tap_close","risk":{"level":"low","effect":"dismiss","buttonText":"关闭","dialogText":"活动公告，右上角关闭","consequence":"关闭覆盖层回到游戏","reason":"不会付费或改变账号数据","hazards":[]},"target":null,"confidence":1}',
     1280,
     720
   )
   ok('tap_close 没框被拒', !p4.ok)
   const p5 = parseAdvice(
-    '{"screen":"popup","action":"tap_close","target":{"x":0,"y":0,"w":900,"h":600},"confidence":1}',
+    '{"screen":"popup","action":"tap_close","risk":{"level":"low","effect":"dismiss","buttonText":"关闭","dialogText":"活动公告，右上角关闭","consequence":"关闭覆盖层回到游戏","reason":"不会付费或改变账号数据","hazards":[]},"target":{"x":0,"y":0,"w":900,"h":600},"confidence":1}',
     1280,
     720
   )
@@ -604,7 +604,7 @@ async function checkEndToEnd(dataDir: string): Promise<void> {
     {
       status: 200,
       body: chatBody(
-        '{"screen":"popup","action":"tap_close","target":{"x":920,"y":110,"w":40,"h":40},"confidence":0.92,"reason":"活动弹窗右上角有关闭按钮"}'
+        '{"screen":"popup","action":"tap_close","risk":{"level":"low","effect":"dismiss","buttonText":"关闭","dialogText":"活动公告，右上角关闭","consequence":"关闭覆盖层回到游戏","reason":"不会付费或改变账号数据","hazards":[]},"target":{"x":920,"y":110,"w":40,"h":40},"confidence":0.92,"reason":"活动弹窗右上角有关闭按钮"}'
       )
     },
     {
@@ -706,7 +706,7 @@ async function checkEndToEnd(dataDir: string): Promise<void> {
     api.queue({
       status: 200,
       body: chatBody(
-        '{"screen":"popup","action":"tap_close","target":{"x":920,"y":110,"w":40,"h":40},"confidence":0.9,"reason":"×"}'
+        '{"screen":"popup","action":"tap_close","risk":{"level":"low","effect":"dismiss","buttonText":"关闭","dialogText":"活动公告，右上角关闭","consequence":"关闭覆盖层回到游戏","reason":"不会付费或改变账号数据","hazards":[]},"target":{"x":920,"y":110,"w":40,"h":40},"confidence":0.9,"reason":"×"}'
       )
     })
     const io2 = makeIo(() => after)
@@ -736,7 +736,7 @@ async function checkEndToEnd(dataDir: string): Promise<void> {
   api.queue({
     status: 200,
     body: chatBody(
-      '{"screen":"other","action":"back","target":null,"confidence":0.8,"reason":"在背包页"}'
+      '{"screen":"other","action":"back","risk":{"level":"low","effect":"navigate","buttonText":"返回","dialogText":"背包页面","consequence":"关闭覆盖层回到游戏","reason":"不会付费或改变账号数据","hazards":[]},"target":null,"confidence":0.8,"reason":"在背包页"}'
     )
   })
   const io3 = makeIo(() => after)
@@ -762,7 +762,7 @@ async function checkEndToEnd(dataDir: string): Promise<void> {
   api.queue({
     status: 200,
     body: chatBody(
-      '{"screen":"popup","action":"tap_close","target":{"x":920,"y":110,"w":40,"h":40},"confidence":0.2,"reason":"不太确定"}'
+      '{"screen":"popup","action":"tap_close","risk":{"level":"low","effect":"dismiss","buttonText":"关闭","dialogText":"活动公告，右上角关闭","consequence":"关闭覆盖层回到游戏","reason":"不会付费或改变账号数据","hazards":[]},"target":{"x":920,"y":110,"w":40,"h":40},"confidence":0.2,"reason":"不太确定"}'
     )
   })
   const io4 = makeIo(() => after)
@@ -785,7 +785,7 @@ async function checkEndToEnd(dataDir: string): Promise<void> {
   api.queue({
     status: 200,
     body: chatBody(
-      '{"screen":"popup","action":"tap_close","target":{"x":300,"y":300,"w":40,"h":40},"confidence":0.9,"reason":"认错了"}'
+      '{"screen":"popup","action":"tap_close","risk":{"level":"low","effect":"dismiss","buttonText":"关闭","dialogText":"活动公告，右上角关闭","consequence":"关闭覆盖层回到游戏","reason":"不会付费或改变账号数据","hazards":[]},"target":{"x":300,"y":300,"w":40,"h":40},"confidence":0.9,"reason":"认错了"}'
     )
   })
   const io5 = makeIo(() => before)
@@ -823,7 +823,7 @@ async function checkEndToEnd(dataDir: string): Promise<void> {
   api.queue({
     status: 200,
     body: chatBody(
-      '{"screen":"popup","action":"tap_close","target":{"x":920,"y":110,"w":40,"h":40},"confidence":0.9,"reason":"×"}'
+      '{"screen":"popup","action":"tap_close","risk":{"level":"low","effect":"dismiss","buttonText":"关闭","dialogText":"活动公告，右上角关闭","consequence":"关闭覆盖层回到游戏","reason":"不会付费或改变账号数据","hazards":[]},"target":{"x":920,"y":110,"w":40,"h":40},"confidence":0.9,"reason":"×"}'
     )
   })
   const io6 = makeIo(() => halfway)

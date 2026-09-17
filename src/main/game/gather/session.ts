@@ -68,6 +68,7 @@ export interface UnknownScreenAdvisor {
 }
 
 export interface UnknownScreenContext {
+  checkAlive?: () => void
   instanceIndex: number | null
   /** 认不出的那一帧。 */
   raw: RawFrame

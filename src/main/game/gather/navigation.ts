@@ -278,6 +278,7 @@ export async function ensureWorldMap(s: GatherSession, maxAttempts = 6): Promise
       let handled = false
       try {
         handled = await s.advisor.handleUnknownScreen({
+          checkAlive: () => s.ensureAlive(),
           instanceIndex: s.instanceIndex,
           raw: f.raw,
           attempt,
@@ -295,6 +296,8 @@ export async function ensureWorldMap(s: GatherSession, maxAttempts = 6): Promise
           log: (level, message, data) => s.log(level, message, data)
         })
       } catch (e) {
+        if (['GAME_UPDATE_REQUIRED', 'AI_RISK_BLOCKED'].includes(AppError.from(e).code)) throw e
+        s.ensureAlive()
         s.log('warn', `AI 顾问出错，按未处理继续：${e instanceof Error ? e.message : String(e)}`)
       }
       s.invalidate()
