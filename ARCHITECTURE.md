@@ -269,7 +269,9 @@ src/
      └─ <runId>.ndjson               每次执行的日志（每行一个 LogEntry）
 ```
 
-随包分发的静态资源在 `resources/`（`templates/` 内置模板、`apk/ADBKeyboard.apk`）。
+随包分发的静态资源在 `resources/`（`apk/ADBKeyboard.apk`、`game-update/` 更新弹窗模板、品牌图等）。
+`resources/templates/` 在仓库里是空的：打包时 electron-builder 把 `.wl-data/templates/`（已进 git 的模板集）复制进去，
+首次启动由 `main/store/builtinTemplates.ts` 补进 `<dataDir>/templates/`（只增不改，用户改过的与 AI 自学的模板都不动）。
 
 ★ **`alerts.json` 是凭据文件**（Telegram Bot Token 存在里面）。整个 `<dataDir>` 已被 `.gitignore`
 覆盖，`.gitignore` 里另外还单独兜了一道 `alerts.json` / `alerts-pauses.json`。

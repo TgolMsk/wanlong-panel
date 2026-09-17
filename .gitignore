@@ -7,6 +7,7 @@ dist/
 
 # 开发期运行数据（正式运行时落在 app.getPath('userData')）。
 # ★ 只放行模板库 .wl-data/templates/（自动化离不开它，1.5MB），其余（账号、告警配置含 token、统计、截图、日志）一律不进 git。
+#   这份模板集也随安装包分发：electron-builder.yml 的 extraResources 把它复制进 resources/templates/，首次启动补进用户数据目录。
 .wl-data/*
 !.wl-data/templates/
 

@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { app, BrowserWindow, shell } from 'electron'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 
-import { GLOBAL_ADB_CONCURRENCY } from '@shared/constants'
+import { DATA_DIRS, GLOBAL_ADB_CONCURRENCY } from '@shared/constants'
 import { AppError } from '@shared/errors'
 import type { AppSettings, ResolvedPaths } from '@shared/domain'
 import type { LogLevel, RunSnapshot, RunStatus } from '@shared/script'
@@ -30,6 +30,7 @@ import {
 } from '@main/config'
 import { selectDataContext } from '@main/dataContext'
 import { ensureDirs, resolvePaths, resourcesDir } from '@main/paths'
+import { seedBuiltinTemplates } from '@main/store/builtinTemplates'
 import { runHealthCheck } from '@main/health'
 import { registerAllHandlers } from '@main/handlers/index'
 import { ensureDevice, rawFrameToShot, toArrayBuffer, toDevicePoint } from '@main/handlers/device'
@@ -1145,6 +1146,27 @@ async function refreshHealth(): Promise<void> {
   }
 }
 
+/**
+ * 把安装包里的内置模板集补进用户模板库（只增不改，见 store/builtinTemplates.ts）。
+ * 失败只记日志，绝不挡启动 —— 没有模板顶多是自动化跑不起来，自检会提示。
+ */
+async function seedTemplatesQuietly(resolved: ResolvedPaths): Promise<void> {
+  try {
+    await seedBuiltinTemplates({
+      builtinDir: join(resolved.resourcesDir, DATA_DIRS.templates),
+      templatesDir: resolved.templatesDir,
+      log: (level, message) =>
+        level === 'warn'
+          ? console.warn(`[templates] ${message}`)
+          : console.log(`[templates] ${message}`)
+    })
+  } catch (e) {
+    console.warn(
+      `[templates] 内置模板播种失败（不影响启动）：${e instanceof Error ? e.message : String(e)}`
+    )
+  }
+}
+
 async function bootstrap(): Promise<void> {
   const settings = await loadSettings()
   activeContextDir = await selectDataContext(settings)
@@ -1152,10 +1174,13 @@ async function bootstrap(): Promise<void> {
   await ensureDirs(resolved)
 
   applyConfigToModules(settings, resolved)
+  // 模板目录已经推给各模块，现在把安装包里的内置模板集补进去（新装的机器上这里才有第一批模板）。
+  await seedTemplatesQuietly(resolved)
   unsubscribers.push(
     onSettingsChanged((s) => {
       const p = resolvePaths(s, activeContextDir)
       applyConfigToModules(s, p)
+      void seedTemplatesQuietly(p)
       // 轮询间隔也可能被改了；start 在已运行时只换间隔，不会起第二条定时器链。
       safely('调整实例轮询间隔', () => registry.start(s.instancePollIntervalMs))
     })

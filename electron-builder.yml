@@ -23,6 +23,13 @@ extraResources:
     to: resources
     filter:
       - '**/*'
+  # ★ 模板库随包分发：仓库里模板集的唯一真相是 .wl-data/templates/<setId>/（已进 git），
+  #   打包时复制到 <Resources>/resources/templates/，首次启动由 src/main/store/builtinTemplates.ts
+  #   补进用户数据目录的 templates/（只增不改）。少了这条，装完的面板一张模板都没有。
+  - from: .wl-data/templates
+    to: resources/templates
+    filter:
+      - '**/*'
 
 # ★ sharp 是 N-API 原生模块，libvips 的 .node / .dylib 不能待在 asar 里（dlopen 打不开）。
 # ★ @techstark/opencv-js 是 WASM，运行时要用 fs 读 .wasm 同样不能压进 asar。
