@@ -13,8 +13,8 @@ import { PauseBanner } from '@/features/alerts'
 import { formatAgo, formatClock, formatShort } from './present'
 import { MarchRow } from './MarchRow'
 
-/** 卡头右侧的队列徽章。读的是「部队管理」面板右上角的 N/M（实测 4/5）。 */
-function QueueBadge({ state }: { state: InstanceQueueState }): React.JSX.Element {
+/** 队列徽章。读的是「部队管理」面板右上角的 N/M（实测 4/5）。卡头与实例列表的「自动采集」列共用。 */
+export function QueueBadge({ state }: { state: InstanceQueueState }): React.JSX.Element {
   const free = freeQueueSlots(state)
   if (state.queueUsed == null || state.queueTotal == null || free == null) {
     return (

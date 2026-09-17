@@ -540,3 +540,36 @@
   gap: var(--wl-space-2);
   flex-wrap: wrap;
 }
+
+/* ── 实例列表「自动采集」列（InstanceGatherControls）────────────────────── */
+.wlg-inline-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-2);
+  min-width: 0;
+}
+.wlg-inline-row {
+  display: flex;
+  align-items: center;
+  gap: var(--wl-space-2);
+  white-space: nowrap;
+}
+/* Tooltip 挂在禁用的开关/按钮上收不到鼠标事件，外面套一层可命中的壳。 */
+.wlg-inline-hit {
+  display: inline-flex;
+  align-items: center;
+}
+.wlg-inline-row .wlg-queue {
+  padding-block: 0;
+}
+/* 可点击的提醒标签：去掉原生按钮外观，只保留焦点环。 */
+.wlg-tag-btn {
+  all: unset;
+  display: inline-flex;
+  cursor: pointer;
+  border-radius: var(--wl-radius-pill);
+}
+.wlg-tag-btn:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: 1px;
+}

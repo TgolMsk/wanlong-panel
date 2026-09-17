@@ -19,7 +19,10 @@
 export { default as GatherOverviewView } from './GatherOverviewView'
 export { default as GatherConfigView } from './GatherConfigView'
 
-export { InstanceMarchCard } from './InstanceMarchCard'
+export { InstanceMarchCard, QueueBadge } from './InstanceMarchCard'
+export { InstanceGatherControls } from './InstanceGatherControls'
+export { useInstanceGather, describeBatchOutcome } from './useInstanceGather'
+export type { InstanceGatherApi, BatchOutcome } from './useInstanceGather'
 export { MarchRow } from './MarchRow'
 export { ResourceBadge } from './ResourceBadge'
 export { ConfigField, ConfigSection } from './ConfigField'

@@ -8,6 +8,10 @@
  *     界面上原样展示，渲染进程自己不做任何推算。
  *  3. 雷电会报每个实例**配置**的分辨率，与参考分辨率不一致时在列表里标黄 —— 模板全部截自 2560×1440，
  *     实例不是这个尺寸的话所有匹配都会错位。
+ *
+ * 「自动采集」列（2026-09-17 加）：每行一个开关 + 「采样」按钮，右上角「批量采集」菜单对当前筛选出的实例
+ * 一键全开 / 全关 / 全采样。它走的是 features/gather 里与「采集总览」页**同一套**仓库与通道
+ * （scheduler:setAuto / scheduler:sample / alerts:resume），这里不另存任何状态。
  */
 
 import { useEffect, useMemo, useState } from 'react'
@@ -34,13 +38,17 @@ import {
   CopyOutlined,
   DeleteOutlined,
   DisconnectOutlined,
+  DownOutlined,
   EyeOutlined,
   LinkOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
   PlusOutlined,
   PoweroffOutlined,
   ReloadOutlined,
   SearchOutlined,
   SettingOutlined,
+  SlidersOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons'
 import type { BaseInstanceSelection, CreateInstanceOptions, MumuInstance } from '@shared/domain'
@@ -57,8 +65,23 @@ import { AdbStateTag, InstanceStateTag, RunStatusTag, SemanticTag } from '../com
 import GlassCard from '../components/GlassCard'
 import PreviewPane from './PreviewPane'
 import AccountLoginDrawer from './AccountLoginDrawer'
+import {
+  InstanceGatherControls,
+  describeBatchOutcome,
+  loadGatherConfig,
+  useInstanceGather
+} from '../features/gather'
 
 const GB = 1024 * 1024 * 1024
+
+/** 「批量采集」菜单的三种动作。 */
+type BatchKind = 'on' | 'off' | 'sample'
+
+const BATCH_VERB: Record<BatchKind, string> = {
+  on: '开启自动采集',
+  off: '关闭自动采集',
+  sample: '采样'
+}
 
 interface CreateFormValues {
   source: 'base' | 'blank'
@@ -76,6 +99,7 @@ export default function InstancesView(): React.JSX.Element {
   const refreshInstances = useAppStore((s) => s.refreshInstances)
   const refreshAccounts = useAppStore((s) => s.refreshAccounts)
   const selectInstance = useAppStore((s) => s.selectInstance)
+  const setView = useAppStore((s) => s.setView)
 
   const [busy, setBusy] = useState<Record<string, boolean>>({})
   const [query, setQuery] = useState('')
@@ -127,6 +151,24 @@ export default function InstancesView(): React.JSX.Element {
     setBase(value)
     setBaseReady(true)
   })
+
+  // ── 一键采集：调度器 / 告警两个仓库的订阅与忙态都收在这个 hook 里 ──────────
+  const gather = useInstanceGather()
+  const [batchRunning, setBatchRunning] = useState<BatchKind | null>(null)
+  // 「几分钟前」这类相对时间用 10 秒一跳的粗时钟就够了，别让整张表每秒重渲染。
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 10_000)
+    return () => clearInterval(timer)
+  }, [])
+  // 每个实例的采集配置总开关。主进程只认绑定账号里存的那份；未绑定的实例读到的是本机存储，只用来提示。
+  const configEnabled = useMemo(() => {
+    const map: Record<number, boolean> = {}
+    for (const inst of instances) {
+      map[inst.index] = loadGatherConfig(inst.index, accounts).config.enabled
+    }
+    return map
+  }, [instances, accounts])
 
   async function changeBase(index: number | null): Promise<void> {
     setBaseLoading(true)
@@ -298,6 +340,112 @@ export default function InstancesView(): React.JSX.Element {
     }
   }
 
+  // ── 一键采集：单个实例 ────────────────────────────────────────────────────
+  const openGatherConfig = (index: number): void => {
+    selectInstance(index)
+    setView('gatherConfig')
+  }
+
+  async function handleToggleAuto(index: number, enabled: boolean): Promise<void> {
+    const err = await gather.toggleAuto(index, enabled)
+    if (err) {
+      toast().error(`实例 #${index} ${enabled ? '开启' : '关闭'}自动采集失败：${err}`)
+      return
+    }
+    toast().success(
+      enabled
+        ? `实例 #${index} 已开启自动采集，正在读一次「部队管理」面板。`
+        : `实例 #${index} 已关闭自动采集，不会再主动操作它。`
+    )
+  }
+
+  async function handleSample(index: number): Promise<void> {
+    const err = await gather.sample(index)
+    if (err) toast().error(`实例 #${index} 采样失败：${err}`)
+    else toast().success(`实例 #${index} 已重新读取「部队管理」面板。`)
+  }
+
+  async function handleResume(index: number): Promise<void> {
+    const err = await gather.resume(index)
+    if (err) toast().error(`实例 #${index} 恢复失败：${err}`)
+    else toast().success(`实例 #${index} 已恢复自动采集，正在重新读一次「部队管理」面板。`)
+  }
+
+  // ── 一键采集：批量（只作用于当前筛选出来的实例）──────────────────────────
+
+  /** 挑出这次批量操作真正会碰的实例；其余的按原因分组，最后一起告诉用户跳过了谁。 */
+  function batchTargets(kind: BatchKind): { targets: number[]; skipped: string[] } {
+    const targets: number[] = []
+    const skip: Record<string, number[]> = {}
+    const skipAs = (reason: string, index: number): void => {
+      const list = skip[reason] ?? (skip[reason] = [])
+      list.push(index)
+    }
+    for (const inst of visibleInstances) {
+      const acc = accountOfInstance(accounts, inst.index)
+      const st = gather.stateOf(inst.index, acc?.id ?? null)
+      const paused = gather.pauseFor(inst.index).paused
+      if (kind === 'off') {
+        if (!st.auto) skipAs('本来就是关的', inst.index)
+        else if (gather.autoBusy[inst.index]) skipAs('开关正在切换', inst.index)
+        else targets.push(inst.index)
+        continue
+      }
+      if (!isInstanceUp(inst)) skipAs('未开机', inst.index)
+      else if (paused) skipAs('已被异常暂停，请单独点「恢复」', inst.index)
+      else if (kind === 'on' && base?.index === inst.index) skipAs('是基础实例', inst.index)
+      else if (kind === 'on' && st.auto) skipAs('本来就是开的', inst.index)
+      else if (kind === 'on' && gather.autoBusy[inst.index]) skipAs('开关正在切换', inst.index)
+      else if (kind === 'sample' && (gather.samplingMap[inst.index] || st.sampling)) {
+        skipAs('正在采样', inst.index)
+      } else if (kind === 'sample' && st.operating) skipAs('设备操作中', inst.index)
+      else targets.push(inst.index)
+    }
+    const skipped = Object.entries(skip).map(([reason, list]) => `${reason}：#${list.join('、#')}`)
+    return { targets, skipped }
+  }
+
+  async function runBatch(kind: BatchKind): Promise<void> {
+    const { targets, skipped } = batchTargets(kind)
+    const verb = BATCH_VERB[kind]
+    if (targets.length === 0) {
+      toast().info(
+        `当前列表里没有可${verb}的实例${skipped.length ? `（${skipped.join('；')}）` : ''}。`
+      )
+      return
+    }
+    const go = async (): Promise<void> => {
+      setBatchRunning(kind)
+      try {
+        const out =
+          kind === 'sample'
+            ? await gather.sampleMany(targets)
+            : await gather.setAutoMany(targets, kind === 'on')
+        const summary =
+          describeBatchOutcome(verb, out) + (skipped.length ? ` 跳过：${skipped.join('；')}。` : '')
+        if (out.failed.length > 0) toast().warning(summary)
+        else toast().success(summary)
+      } finally {
+        setBatchRunning(null)
+      }
+    }
+    if (kind !== 'on') {
+      await go()
+      return
+    }
+    // 开启是会真的派兵的动作，批量做之前让用户看一眼会碰到哪些实例。
+    Modal.confirm({
+      title: `开启 ${targets.length} 个实例的自动采集？`,
+      content:
+        `将对实例 #${targets.join('、#')} 打开自动调度：每个实例会先读一次「部队管理」面板，` +
+        '之后队列一有空位就真的会派出采集队。' +
+        (skipped.length ? `跳过：${skipped.join('；')}。` : ''),
+      okText: '全部开启',
+      cancelText: '取消',
+      onOk: go
+    })
+  }
+
   const columns: TableColumnsType<MumuInstance> = [
     {
       title: '实例',
@@ -385,6 +533,37 @@ export default function InstancesView(): React.JSX.Element {
               <Progress percent={pct} size="small" />
             )}
           </Space>
+        )
+      }
+    },
+    {
+      title: (
+        <Tooltip title="与「采集总览」页的「自动调度」开关、「立即采样」按钮是同一套：开关决定调度器要不要在队列释放时自动派下一轮；「采样」是立刻读一次「部队管理」面板，不派兵。">
+          <span>自动采集</span>
+        </Tooltip>
+      ),
+      key: 'gather',
+      width: 250,
+      render: (_: unknown, r) => {
+        const acc = accountOfInstance(accounts, r.index)
+        return (
+          <InstanceGatherControls
+            instance={r}
+            state={gather.stateOf(r.index, acc?.id ?? null)}
+            pause={gather.pauseFor(r.index)}
+            now={now}
+            sampling={gather.samplingMap[r.index] === true}
+            toggling={gather.autoBusy[r.index] === true}
+            resuming={gather.resumingMap[r.index] === true}
+            configEnabled={configEnabled[r.index] === true}
+            hasAccount={!!acc}
+            isBase={base?.index === r.index}
+            onToggleAuto={(i, v) => void handleToggleAuto(i, v)}
+            onSample={(i) => void handleSample(i)}
+            onResume={(i) => void handleResume(i)}
+            onOpenConfig={openGatherConfig}
+            onOpenAccounts={() => setView('accounts')}
+          />
         )
       }
     },
@@ -490,6 +669,7 @@ export default function InstancesView(): React.JSX.Element {
               menu={{
                 items: [
                   { key: 'login', label: '账号登录', disabled: base?.index === r.index || hasRun },
+                  { key: 'gatherConfig', icon: <SlidersOutlined />, label: '采集配置' },
                   { key: 'restart', icon: <ReloadOutlined />, label: '重启实例', disabled: !up },
                   {
                     key: 'detach',
@@ -516,6 +696,7 @@ export default function InstancesView(): React.JSX.Element {
                 ],
                 onClick: ({ key }) => {
                   if (key === 'login') setLoginTargets([r.index])
+                  if (key === 'gatherConfig') openGatherConfig(r.index)
                   if (key === 'restart') {
                     Modal.confirm({
                       title: `重启实例 ${r.index}？`,
@@ -602,6 +783,28 @@ export default function InstancesView(): React.JSX.Element {
         }
         extra={
           <Space>
+            <Dropdown
+              trigger={['click']}
+              disabled={batchRunning !== null || instances.length === 0}
+              menu={{
+                items: [
+                  { key: 'on', icon: <PlayCircleOutlined />, label: '全部开启自动采集' },
+                  { key: 'off', icon: <PauseCircleOutlined />, label: '全部关闭自动采集' },
+                  { type: 'divider' },
+                  { key: 'sample', icon: <ReloadOutlined />, label: '全部立即采样' }
+                ],
+                onClick: ({ key }) => void runBatch(key as BatchKind)
+              }}
+            >
+              <Button
+                icon={<DownOutlined />}
+                iconPosition="end"
+                loading={batchRunning !== null}
+                title="只作用于当前列表里筛选出来的实例：未开机、已暂停、基础实例会自动跳过，结果里会说明。"
+              >
+                批量采集
+              </Button>
+            </Dropdown>
             <Button icon={<ReloadOutlined />} loading={refreshing} onClick={doRefresh}>
               刷新
             </Button>
@@ -651,6 +854,15 @@ export default function InstancesView(): React.JSX.Element {
             style={{ marginBottom: 'var(--wl-space-3)' }}
             message={`已达到并发上限（${limit} 个）`}
             description="继续开机会让 CPU 与内存吃紧（单实例实测 45.7% CPU、1.2GB 内存）。请先关掉一个实例，或到「设置」里调整上限。"
+          />
+        )}
+        {gather.loaded && gather.error && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 'var(--wl-space-3)' }}
+            message="「自动采集」列暂时不可用"
+            description={gather.error}
           />
         )}
         <div className="wl-instance-toolbar">
