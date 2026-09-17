@@ -45,7 +45,9 @@ win:
     - target: portable
       arch:
         - x64
-  artifactName: ${productName}-${version}-win-${arch}.${ext}
+  # ★ 文件名用 package.json 的 name（ASCII）而不是中文 productName：GitHub Release 附件名会被 GitHub 规范化，
+  #   中文会变成一串点；安装后的程序名 / 快捷方式仍然是「万龙面板」。
+  artifactName: ${name}-${version}-win-${arch}.${ext}
 
 nsis:
   oneClick: false
@@ -54,7 +56,7 @@ nsis:
   shortcutName: ${productName}
 
 portable:
-  artifactName: ${productName}-${version}-portable-${arch}.${ext}
+  artifactName: ${name}-${version}-portable-${arch}.${ext}
 
 mac:
   icon: resources/brand/app-icon.icns

@@ -78,6 +78,7 @@ npm run dev          # 起 HMR + 拉起 Electron 窗口（用户点这一个就�
 npm run typecheck    # tsc --noEmit（node + web 两套）
 npm run build        # typecheck + electron-vite build
 npm run dist:win     # electron-builder --win --x64（nsis + portable，未签名）
+                     #   ★ GitHub 上也能打：推 v* 标签会触发 .github/workflows/release.yml 构建并建 Release（README「发布安装包」）
 npm run dist:mac     # electron-builder --mac --arm64
 
 npm run smoke        # 端到端冒烟（真机，只按 HOME/APP_SWITCH + 点一次空白处）

@@ -168,6 +168,31 @@ npm run dist:mac     # 打 dmg（electron-builder --mac --arm64）
 npm run format       # prettier
 ```
 
+### 发布安装包（GitHub Actions）
+
+仓库带了一条工作流 `.github/workflows/release.yml`，在 GitHub 的 Windows 机器上跑 `npm ci → npm run build → electron-builder --win --x64`，
+本地不用装任何东西：
+
+| 触发 | 结果 |
+|---|---|
+| 推到 `main` | 只构建；安装包挂在这次运行的 **Artifacts** 里（登录后可下，默认保留 90 天） |
+| 推 `v*` 标签 | 构建 + 自动创建同名 **Release**，`wanlong-panel-<版本>-win-x64.exe`（安装版）与 `wanlong-panel-<版本>-portable-x64.exe`（免安装）作为附件公开下载 |
+| Actions 页手动触发 | 只构建、只传 Artifacts |
+
+发一个版本：
+
+```bash
+npm version 0.3.0 --no-git-tag-version   # 改 package.json / package-lock.json 的 version
+git commit -am "release: v0.3.0"
+git tag v0.3.0
+git push origin main v0.3.0                # 标签一到 GitHub 就开始构建，约 6~10 分钟后 Release 页面出现安装包
+```
+
+附件文件名用的是 package.json 的 `name`（ASCII）而不是「万龙面板」：GitHub 会把附件名里的中文规范化成一串点。
+安装后的程序名、快捷方式仍然是「万龙面板」。没做代码签名，首次运行 SmartScreen 会提示「未知发布者」，点「仍要运行」即可。
+只想在打标签时才构建的话，把工作流里 `on.push.branches` 那两行删掉。
+
+
 ---
 
 ## 3. 跑冒烟自检
@@ -848,8 +873,8 @@ AI 顾问把这一格交给视觉大模型（任何 **OpenAI 兼容接口 + 支�
 npm run check:ai           # 76 项离线断言：配置三态 / 请求形状 / 8 类失败话术 / ★ Key 泄露实测 / 视觉探测判定 /
                            #   回复解析 / 限频冷却 / ★ 端到端：合成弹窗帧 → 假 AI 给框（两阶段）→ 点击落点 → 复验 →
                            #   自学出模板 → 正式视觉层 loadPrepared+matchIn 在原帧重新命中 → 第二次不重复学
+npm run check:runtime      # 风险类别、低风险确认、二次复核、画面变化、暂停、前台、额度和重复执行保护
 ```
 
 真机上还没验过的：真实活动弹窗上模型给框的精度、不同弹窗 × 的模板泛化程度。第一次真实触发时到设置页「最近问询」看记录，
 学错了就到「模板」页删掉那张 `tpl_btn_close_popup*`。
-npm run check:runtime      # 风险类别、低风险确认、二次复核、画面变化、暂停、前台、额度和重复执行保护
