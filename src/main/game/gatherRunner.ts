@@ -16,8 +16,7 @@
  *   `noteDispatch` 是安全的：调度器对同一异步上下文做了重入放行。
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { loadGatherStates as loadStates, saveGatherState as saveState } from './gatherStateStore'
 
 import type { KickedProbeResult } from '@shared/alerts'
 import { AppError } from '@shared/errors'
@@ -34,13 +33,9 @@ import {
   runGatherCycle,
   type DispatchRecord,
   type GatherCycleResult,
-  type GatherRuntimeState,
   type GatherTemplates,
   type UnknownScreenAdvisor
 } from './gather/index'
-
-/** 采集运行期状态的落盘文件名（放在 dataDir 根下，与 scheduler.json 并列）。 */
-const STATE_FILE = 'gather-state.json'
 
 /** 配置页把采集配置塞在账号的这个「脚本参数」槽里。 */
 const CONFIG_SCRIPT_KEY = 'gather'
@@ -164,33 +159,6 @@ export function readGatherConfigFromAccount(account: {
   }
 }
 
-// ── 运行期状态的落盘 ───────────────────────────────────────────────────────
-
-type StateFile = Record<string, GatherRuntimeState>
-
-async function loadStates(dataDir: string): Promise<StateFile> {
-  try {
-    const text = await readFile(join(dataDir, STATE_FILE), 'utf8')
-    const parsed = JSON.parse(text) as unknown
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
-    return parsed as StateFile
-  } catch {
-    // 文件不存在 / 读坏了都按「从空状态开始」处理 —— 状态本身是缓存，丢了只是慢一点。
-    return {}
-  }
-}
-
-async function saveState(
-  dataDir: string,
-  instanceIndex: number,
-  state: GatherRuntimeState
-): Promise<void> {
-  await mkdir(dataDir, { recursive: true })
-  const all = await loadStates(dataDir)
-  all[String(instanceIndex)] = state
-  await writeFile(join(dataDir, STATE_FILE), JSON.stringify(all, null, 2), 'utf8')
-}
-
 // ── 模板缓存 ───────────────────────────────────────────────────────────────
 //
 // 模板编译不便宜（93 张，界面模板 shrink=2 + 字形 shrink=1 两档），
@@ -255,10 +223,12 @@ export async function runGatherWithContext(
   instanceIndex: number,
   signal?: AbortSignal
 ): Promise<{ result: GatherCycleResult; fact: GatherCycleFact }> {
+  signal?.throwIfAborted()
   const dataDir = deps.dataDir()
   const templates = await templatesFor(deps.templatesDir(), deps.log)
+  signal?.throwIfAborted()
   const serial = await deps.resolveSerial(instanceIndex)
-  const io = createAdbGatherIo({ serial })
+  const io = createAdbGatherIo({ serial, signal })
 
   const rawConfig = await deps.loadConfig(instanceIndex)
   const config = normalizeGatherConfig(
@@ -358,7 +328,7 @@ export async function runGatherWithContext(
  */
 export function createQueueFreeHook(
   deps: GatherRunnerDeps
-): (state: InstanceQueueState) => Promise<void> {
+): (state: InstanceQueueState, signal?: AbortSignal) => Promise<void> {
   /** 把一次「压根没跑起来」的失败也通报给告警模块。★ 通报本身出错不许连累主流程。 */
   const reportQuietly = async (index: number, fact: GatherCycleFact): Promise<void> => {
     if (!deps.onCycleResult) return
@@ -370,18 +340,20 @@ export function createQueueFreeHook(
     }
   }
 
-  return async (queue: InstanceQueueState): Promise<void> => {
+  return async (queue: InstanceQueueState, signal?: AbortSignal): Promise<void> => {
+    if (signal?.aborted) return
     const index = queue.instanceIndex
 
     let ctx: { result: GatherCycleResult; fact: GatherCycleFact }
     try {
-      ctx = await runGatherWithContext(deps, index)
+      ctx = await runGatherWithContext(deps, index, signal)
     } catch (e) {
       // ★ 这一轮**压根没跑起来**：模板集加载失败、解析不出 serial、账号配置读不出来……
       //   这些错在 runGatherWithContext 里就抛了，走不到下面那次通报。
       //   不在这里补一刀的话，「设备/模板一直坏着」就会永远只在调度器里退避重试，
       //   连续失败计数一次都不涨，用户永远等不到「需要人工介入」那条推送。
       const err = AppError.from(e)
+      if (signal?.aborted) return
       await reportQuietly(index, {
         outcome: 'error',
         message: `采集流程没能启动：${err.message}`,
@@ -402,7 +374,7 @@ export function createQueueFreeHook(
 
     // ★ 必须在 throw 之前通报：outcome==='error' 那条路是往上抛的，
     //   抛出去之后 detail.step 会被调度器那层重新包掉，再想判「恢复阶梯用尽」就来不及了。
-    await reportQuietly(index, fact)
+    if (result.outcome !== 'cancelled') await reportQuietly(index, fact)
 
     // 派兵记账交给数据统计。★ 统计链路坏了绝不连累采集：只记一条 warn。
     if (result.dispatched.length > 0 && deps.onDispatched) {

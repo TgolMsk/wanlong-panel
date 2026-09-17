@@ -60,15 +60,16 @@ export function settingsFilePath(): string {
 }
 
 /** 由当前设置推导出全部绝对路径。纯函数，随时可以重算。 */
-export function resolvePaths(settings: AppSettings): ResolvedPaths {
-  const dataDir = settings.dataDir?.trim() ? settings.dataDir : defaultDataDir()
+export function resolvePaths(settings: AppSettings, contextDir?: string): ResolvedPaths {
+  const root = settings.dataDir?.trim() ? settings.dataDir : defaultDataDir()
+  const dataDir = contextDir ?? root
   return {
     dataDir,
-    templatesDir: join(dataDir, DATA_DIRS.templates),
+    templatesDir: join(root, DATA_DIRS.templates),
     shotsDir: join(dataDir, DATA_DIRS.shots),
     logsDir: join(dataDir, DATA_DIRS.logs),
     accountsDir: join(dataDir, DATA_DIRS.accounts),
-    scriptsDir: join(dataDir, DATA_DIRS.scripts),
+    scriptsDir: join(root, DATA_DIRS.scripts),
     resourcesDir: resourcesDir(),
     adbPath: settings.adbPath?.trim() ? settings.adbPath : DEFAULT_ADB_PATH,
     mumutoolPath: settings.mumutoolPath?.trim() ? settings.mumutoolPath : DEFAULT_MUMUTOOL_PATH

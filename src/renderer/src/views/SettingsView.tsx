@@ -90,7 +90,9 @@ export default function SettingsView(): React.JSX.Element {
     try {
       const next = await call('app:saveSettings', v)
       setSettings(next)
-      toast().success('设置已保存')
+      toast().success(
+        next.restartRequired ? '设置已保存，设备与目录变更将在重启面板后生效' : '设置已保存'
+      )
       await refreshPaths()
     } catch {
       /* 已提示 */
@@ -166,6 +168,12 @@ export default function SettingsView(): React.JSX.Element {
     <Row gutter={12}>
       <Col span={14}>
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type={settings.restartRequired ? 'warning' : 'info'}
+            showIcon
+            message={settings.restartRequired ? '有设置等待重启生效' : '设备与数据设置在重启后生效'}
+            description="模拟器、程序路径、数据目录和参考分辨率会在下次启动时切换。不同模拟器安装各自保存账号、调度和运行记录，共享模板与脚本。"
+          />
           <GlassCard
             padding="sm"
             title={
@@ -291,9 +299,10 @@ export default function SettingsView(): React.JSX.Element {
               <Form.Item
                 name="dataDir"
                 label="数据根目录"
-                extra="模板、日志、截图、账号都存在这里。由主进程决定，只读。"
+                rules={[{ required: true, message: '请填写数据目录的完整路径' }]}
+                extra="重启后使用这个目录。已有目录会读取其中数据，空目录用于新建数据；原目录保留，文件不会自动搬迁。"
               >
-                <Input readOnly />
+                <Input />
               </Form.Item>
 
               <Divider titlePlacement="start" style={{ margin: '4px 0 12px' }}>

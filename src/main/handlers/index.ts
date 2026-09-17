@@ -48,6 +48,9 @@ import { registerScriptHandlers } from './script'
 import { registerRunHandlers } from './run'
 import { registerAccountHandlers } from './account'
 import { registerAppHandlers } from './app'
+import { registerLoginHandlers } from './login'
+import type { AccountLoginCoordinator } from '@main/login/coordinator'
+import type { InstanceProvisioner } from '@main/instanceProvisioner'
 
 /** 端口方法允许同步或异步实现，handler 一律 await。 */
 export type MaybePromise<T> = T | Promise<T>
@@ -186,6 +189,8 @@ export interface OrchestratorPort {
 // ── handler 的全部依赖 ────────────────────────────────────────────────────
 
 export interface MainDeps {
+  provisioner: InstanceProvisioner
+  login: AccountLoginCoordinator
   mumu: MumuPort
   adb: AdbPort
   vision: VisionPort
@@ -213,4 +218,5 @@ export function registerAllHandlers(deps: MainDeps): void {
   registerRunHandlers(deps)
   registerAccountHandlers(deps)
   registerAppHandlers(deps)
+  registerLoginHandlers(deps)
 }

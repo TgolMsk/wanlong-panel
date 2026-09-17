@@ -74,18 +74,18 @@ type DrawMode = 'crop' | 'roi'
 
 interface Shot {
   bitmap: ImageBitmap
-  jpeg: ArrayBuffer
+  png: ArrayBuffer
   /** 设备真实分辨率（screencap 头部给的）。 */
   deviceWidth: number
   deviceHeight: number
-  /** jpeg 自身的像素尺寸 —— crop 坐标以它为准。 */
+  /** PNG 自身的像素尺寸 —— crop 坐标以它为准。 */
   imgWidth: number
   imgHeight: number
 }
 
 /** 「再抓一帧去底」抓的差分帧：与主帧同一实例、同一分辨率，只是画面被拖开了一点。 */
 interface DiffShot {
-  jpeg: ArrayBuffer
+  png: ArrayBuffer
   /** 缩略图 blob URL，卸载 / 清空时要 revoke。 */
   url: string
   imgWidth: number
@@ -93,10 +93,22 @@ interface DiffShot {
 }
 
 /** 去底预览的解读：覆盖率太低多半是几帧位置没对齐，≈100% 说明控件是实心的、不需要去底。 */
-function describeCoverage(c: number): { tone: 'danger' | 'warning' | 'success' | 'info'; hint: string } {
-  if (c < 0.1) return { tone: 'danger', hint: '几乎全被抠掉了：几帧之间控件位置对不上？或者容差太小。保存会被拒绝。' }
-  if (c < 0.3) return { tone: 'warning', hint: '留下的本体很少，匹配可能不稳；试试调大容差或重抓差分帧。' }
-  if (c >= 0.97) return { tone: 'info', hint: '几乎整块不透明：这个控件是实心的，不需要去底，保存后按普通模板处理。' }
+function describeCoverage(c: number): {
+  tone: 'danger' | 'warning' | 'success' | 'info'
+  hint: string
+} {
+  if (c < 0.1)
+    return {
+      tone: 'danger',
+      hint: '几乎全被抠掉了：几帧之间控件位置对不上？或者容差太小。保存会被拒绝。'
+    }
+  if (c < 0.3)
+    return { tone: 'warning', hint: '留下的本体很少，匹配可能不稳；试试调大容差或重抓差分帧。' }
+  if (c >= 0.97)
+    return {
+      tone: 'info',
+      hint: '几乎整块不透明：这个控件是实心的，不需要去底，保存后按普通模板处理。'
+    }
   return { tone: 'success', hint: '洋红 = 抠掉（不参与匹配）；剩下的就是控件本体。' }
 }
 
@@ -254,17 +266,17 @@ export default function TemplateEditor(): React.JSX.Element {
     setCapturing(true)
     try {
       // width:0 = 保持原始分辨率。模板越接近原始像素，匹配越稳。
-      const s = await call('device:capture', selectedInstance, { width: fullRes ? 0 : 1280 })
-      const bitmap = await createImageBitmap(new Blob([s.jpeg], { type: 'image/jpeg' }))
+      const s = await call('device:capturePng', selectedInstance, fullRes ? 0 : 1280)
+      const bitmap = await createImageBitmap(new Blob([s.png], { type: 'image/png' }))
       // 旧帧的 ImageBitmap 由下面那个 [shot] 依赖的 effect 在 cleanup 里 close，
       // 这里不要在 setState 的 updater 里做副作用（StrictMode 会把 updater 跑两遍）。
       setShot({
         bitmap,
-        jpeg: s.jpeg,
+        png: s.png,
         deviceWidth: s.width,
         deviceHeight: s.height,
-        imgWidth: s.jpegWidth,
-        imgHeight: s.jpegHeight
+        imgWidth: s.imageWidth,
+        imgHeight: s.imageHeight
       })
       setCrop(null)
       setRoi(null)
@@ -301,19 +313,19 @@ export default function TemplateEditor(): React.JSX.Element {
     }
     setCapturingDiff(true)
     try {
-      const s = await call('device:capture', selectedInstance, { width: fullRes ? 0 : 1280 })
-      if (s.jpegWidth !== shot.imgWidth || s.jpegHeight !== shot.imgHeight) {
+      const s = await call('device:capturePng', selectedInstance, fullRes ? 0 : 1280)
+      if (s.imageWidth !== shot.imgWidth || s.imageHeight !== shot.imgHeight) {
         toast().error(
-          `这一帧 ${s.jpegWidth}x${s.jpegHeight} 与主帧 ${shot.imgWidth}x${shot.imgHeight} 尺寸不一致，` +
+          `这一帧 ${s.imageWidth}x${s.imageHeight} 与主帧 ${shot.imgWidth}x${shot.imgHeight} 尺寸不一致，` +
             '请保持同一实例、同一「原始分辨率」开关再抓。'
         )
         return
       }
       const d: DiffShot = {
-        jpeg: s.jpeg,
-        url: bufferToObjectUrl(s.jpeg),
-        imgWidth: s.jpegWidth,
-        imgHeight: s.jpegHeight
+        png: s.png,
+        url: bufferToObjectUrl(s.png, 'image/png'),
+        imgWidth: s.imageWidth,
+        imgHeight: s.imageHeight
       }
       diffShotsRef.current = [...diffShotsRef.current, d]
       setDiffShots(diffShotsRef.current)
@@ -345,8 +357,8 @@ export default function TemplateEditor(): React.JSX.Element {
       setPreviewing(true)
       setPreviewError(null)
       silentCall('template:alphaPreview', {
-        image: shot.jpeg,
-        diffFrames: diffShots.map((d) => d.jpeg),
+        image: shot.png,
+        diffFrames: diffShots.map((d) => d.png),
         crop,
         tolerance: diffTolerance,
         previewWidth: 320
@@ -430,7 +442,7 @@ export default function TemplateEditor(): React.JSX.Element {
     const input: TemplateSaveInput = {
       ...(idText ? { id: idText } : {}),
       name: name.trim(),
-      image: shot.jpeg,
+      image: shot.png,
       authoredWidth: shot.imgWidth,
       authoredHeight: shot.imgHeight,
       crop,
@@ -438,9 +450,7 @@ export default function TemplateEditor(): React.JSX.Element {
       threshold,
       note: note.trim() || undefined,
       // 透明底：有差分帧就交给主进程按 crop 做差分去底（与预览走同一套算法）。
-      ...(diffShots.length > 0
-        ? { diffFrames: diffShots.map((d) => d.jpeg), diffTolerance }
-        : {})
+      ...(diffShots.length > 0 ? { diffFrames: diffShots.map((d) => d.png), diffTolerance } : {})
     }
     setSaving(true)
     setSaveError(null)
@@ -632,7 +642,9 @@ export default function TemplateEditor(): React.JSX.Element {
                           <Tooltip
                             title={`透明底模板：只有 ${Math.round(t.maskCoverage * 100)}% 的像素参与匹配，其余是会变的背景，已抠掉（多帧差分去底）。`}
                           >
-                            <SemanticTag tone="info">透明底 {Math.round(t.maskCoverage * 100)}%</SemanticTag>
+                            <SemanticTag tone="info">
+                              透明底 {Math.round(t.maskCoverage * 100)}%
+                            </SemanticTag>
                           </Tooltip>
                         )}
                       </Space>
@@ -680,7 +692,8 @@ export default function TemplateEditor(): React.JSX.Element {
                 </Descriptions.Item>
                 {typeof selectedTpl.maskCoverage === 'number' && (
                   <Descriptions.Item label="透明底">
-                    不透明 {Math.round(selectedTpl.maskCoverage * 100)}%，其余像素（会变的背景）不参与匹配
+                    不透明 {Math.round(selectedTpl.maskCoverage * 100)}
+                    %，其余像素（会变的背景）不参与匹配
                   </Descriptions.Item>
                 )}
               </Descriptions>
@@ -756,7 +769,7 @@ export default function TemplateEditor(): React.JSX.Element {
             )}
             {shot && (
               <span className="wl-micro">
-                设备画面 {shot.deviceWidth}x{shot.deviceHeight}｜本帧 {shot.imgWidth}x
+                无损 PNG｜设备画面 {shot.deviceWidth}x{shot.deviceHeight}｜本帧 {shot.imgWidth}x
                 {shot.imgHeight}
               </span>
             )}
@@ -845,7 +858,9 @@ export default function TemplateEditor(): React.JSX.Element {
               <Space size={6}>
                 <BgColorsOutlined />
                 <span>透明底（去掉会变的背景）</span>
-                {diffShots.length > 0 && <SemanticTag tone="info">已抓 {diffShots.length}/3 帧</SemanticTag>}
+                {diffShots.length > 0 && (
+                  <SemanticTag tone="info">已抓 {diffShots.length}/3 帧</SemanticTag>
+                )}
               </Space>
             }
             extra={
@@ -874,8 +889,9 @@ export default function TemplateEditor(): React.JSX.Element {
               <Col flex="1 1 320px">
                 <Typography.Paragraph className="wl-micro" style={{ marginBottom: 8 }}>
                   圆环 / 镂空 / 半透明、压在地图或城内地形上的控件，整块裁下来会随背景漂移。
-                  做法：先把游戏画面<strong>拖开一点</strong>（让图标底下的背景变了、图标本身没动），
-                  再点「再抓一帧去底」，抓 1~3 帧。几帧之间没变的像素才当模板本体，其余抠成透明、不参与匹配。
+                  做法：先把游戏画面<strong>拖开一点</strong>
+                  （让图标底下的背景变了、图标本身没动）， 再点「再抓一帧去底」，抓 1~3
+                  帧。几帧之间没变的像素才当模板本体，其余抠成透明、不参与匹配。
                   实心控件不需要这一步。
                 </Typography.Paragraph>
                 <Space wrap size={8}>

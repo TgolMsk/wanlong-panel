@@ -63,6 +63,14 @@ export async function matchAllInCrop(
     )
   }
   // ROI 比模板还小时不是错误，是「这块地方装不下这个字形」，返回空即可。
+  if (tpl.mask && tpl.mask.length !== tpl.w * tpl.h) {
+    throw new AppError('INVALID_ARGUMENT', `字形模板「${tpl.name}」掩码尺寸不符`, {
+      templateId: tpl.id
+    })
+  }
+  if (tpl.mask && !tpl.mask.some((value) => value !== 0)) {
+    throw new AppError('TEMPLATE_LOW_VARIANCE', `字形模板「${tpl.name}」掩码没有有效像素`)
+  }
   if (crop.w < tpl.w || crop.h < tpl.h) return []
 
   const minScore = clamp01(opts.minScore ?? DEFAULT_MIN_SCORE)
@@ -77,7 +85,13 @@ export async function matchAllInCrop(
     const tplMat = keep(new cv.Mat(tpl.h, tpl.w, cv.CV_8UC1))
     ;(tplMat.data as Uint8Array).set(tpl.gray)
     const dst = keep(new cv.Mat())
-    cv.matchTemplate(src, tplMat, dst, cv.TM_CCOEFF_NORMED)
+    if (tpl.mask) {
+      const maskMat = keep(new cv.Mat(tpl.h, tpl.w, cv.CV_8UC1))
+      ;(maskMat.data as Uint8Array).set(tpl.mask)
+      cv.matchTemplate(src, tplMat, dst, cv.TM_CCOEFF_NORMED, maskMat)
+    } else {
+      cv.matchTemplate(src, tplMat, dst, cv.TM_CCOEFF_NORMED)
+    }
 
     const dw = dst.cols as number
     const dh = dst.rows as number
@@ -88,8 +102,12 @@ export async function matchAllInCrop(
       for (let x = 0; x < dw; x++) {
         const v = data[base + x]
         // 纯色区域相关系数分母为 0，OpenCV 会给 NaN/Inf —— 那不是命中。
-        if (!Number.isFinite(v) || v < minScore) continue
-        found.push({ x: crop.x + x, y: crop.y + y, score: Math.round(v * 10000) / 10000 })
+        if (!Number.isFinite(v) || v > 1.01 || v < minScore) continue
+        found.push({
+          x: crop.x + x,
+          y: crop.y + y,
+          score: Math.round(Math.min(1, v) * 10000) / 10000
+        })
       }
     }
     return found

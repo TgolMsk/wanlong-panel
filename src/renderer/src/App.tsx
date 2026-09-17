@@ -5,24 +5,13 @@
  *   instance:changed / run:changed / log:line / app:toast / app:settingsChanged / app:health
  * 高频数据（实时日志、预览帧）不走这里，走 MessagePort（见 ipc/useWorkerPort.ts）。
  *
- * 外观：Layout 三层全透明，让 body 上的品牌渐变（#050517 → #4444A3）透上来；
- * 顶栏用 `.wl-blur-bar` 浮在渐变之上。颜色一律走 tokens.css 的 var(--wl-*)。
+ * 外观：五个主入口 + 组内页面切换，侧栏和顶栏使用半透明底色。
+ * 布局在 shell.css，颜色沿用 tokens.css 的 var(--wl-*)。
  */
 
-import { useEffect, useMemo } from 'react'
-import { App as AntApp, Alert, Layout, Menu, Space } from 'antd'
-import {
-  AppstoreOutlined,
-  BarChartOutlined,
-  ClockCircleOutlined,
-  ControlOutlined,
-  FileTextOutlined,
-  PictureOutlined,
-  RobotOutlined,
-  SettingOutlined,
-  ThunderboltOutlined,
-  UserOutlined
-} from '@ant-design/icons'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { App as AntApp, Alert, Button, Layout, Menu, Space, Tooltip } from 'antd'
+import { MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons'
 import { countRunningInstances, isRunActive, useAppStore, type ViewKey } from './store/appStore'
 import { bindToaster, useIpcEvent } from './ipc/useIpc'
 import { postToAllWorkers } from './ipc/useWorkerPort'
@@ -40,19 +29,9 @@ import GatherOverviewView from './features/gather/GatherOverviewView'
 import GatherConfigView from './features/gather/GatherConfigView'
 import StatsView from './features/stats/StatsView'
 import { AiView } from './features/ai'
-
-const MENU_ITEMS: { key: ViewKey; icon: React.ReactNode; label: string }[] = [
-  { key: 'instances', icon: <AppstoreOutlined />, label: '实例管理' },
-  { key: 'runs', icon: <ThunderboltOutlined />, label: '执行监控' },
-  { key: 'gatherOverview', icon: <ClockCircleOutlined />, label: '采集总览' },
-  { key: 'gatherConfig', icon: <ControlOutlined />, label: '采集配置' },
-  { key: 'stats', icon: <BarChartOutlined />, label: '数据统计' },
-  { key: 'ai', icon: <RobotOutlined />, label: 'AI 处理' },
-  { key: 'templates', icon: <PictureOutlined />, label: '模板库' },
-  { key: 'scripts', icon: <FileTextOutlined />, label: '脚本' },
-  { key: 'accounts', icon: <UserOutlined />, label: '账号' },
-  { key: 'settings', icon: <SettingOutlined />, label: '设置' }
-]
+import { NAVIGATION, sectionForView } from './navigation'
+import appLogo from './assets/brand/app-icon.png'
+import './styles/shell.css'
 
 function CurrentView({ view }: { view: ViewKey }): React.JSX.Element {
   switch (view) {
@@ -93,6 +72,7 @@ export default function App(): React.JSX.Element {
   const bootstrapped = useAppStore((s) => s.bootstrapped)
   const bootstrap = useAppStore((s) => s.bootstrap)
   const setInstances = useAppStore((s) => s.setInstances)
+  const setAccounts = useAppStore((s) => s.setAccounts)
   const upsertRun = useAppStore((s) => s.upsertRun)
   const setSettings = useAppStore((s) => s.setSettings)
   const setHealth = useAppStore((s) => s.setHealth)
@@ -109,6 +89,7 @@ export default function App(): React.JSX.Element {
 
   // ── 主进程推送 ──────────────────────────────────────────────────────────
   useIpcEvent('instance:changed', (list) => setInstances(list))
+  useIpcEvent('account:changed', (list) => setAccounts(list))
   useIpcEvent('run:changed', (snap) => upsertRun(snap))
   useIpcEvent('log:line', (entry) => pushLog(entry))
   useIpcEvent('app:settingsChanged', (s) => setSettings(s))
@@ -132,62 +113,85 @@ export default function App(): React.JSX.Element {
   const upCount = useMemo(() => countRunningInstances(instances), [instances])
   const activeRuns = useMemo(() => runs.filter((r) => isRunActive(r.status)).length, [runs])
   const instancesFull = upCount >= settings.maxConcurrentInstances
+  const section = sectionForView(view)
+  const [collapsed, setCollapsed] = useState(false)
+  const sectionViews = useRef<Record<string, ViewKey>>({})
+  useEffect(() => {
+    sectionViews.current[section.key] = view
+  }, [section.key, view])
 
   return (
-    <Layout style={{ height: '100vh' }}>
-      <Layout.Header
-        className="wl-blur-bar"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          paddingInline: 'var(--wl-space-6)',
-          height: 'var(--wl-layout-header-h)',
-          lineHeight: 'normal',
-          // 内联写一遍底色：antd 的 Layout.headerBg 与 .wl-blur-bar 都是单类选择器，
-          // 注入顺序不保证，内联样式才能稳定压住 antd 默认的 #001529。
-          background: 'var(--wl-bg-blur)'
-        }}
+    <Layout className="wl-shell">
+      <Layout.Sider
+        width={208}
+        collapsedWidth={72}
+        collapsed={collapsed}
+        className={`wl-sidebar ${collapsed ? 'wl-sidebar-collapsed' : ''}`}
       >
-        <span className="wl-heading">万龙控制面板</span>
-        <Space size={10}>
-          <SemanticTag
-            tone={instancesFull ? 'warning' : 'info'}
-            title={instancesFull ? '已开机实例数达到并发上限' : '已开机实例数 / 并发上限'}
-          >
-            实例 {upCount}/{settings.maxConcurrentInstances}
-          </SemanticTag>
-          <SemanticTag tone={activeRuns > 0 ? 'accent' : 'neutral'} title="正在执行的任务数">
-            执行中 {activeRuns}
-          </SemanticTag>
-          <HealthBadge />
-          <ThemeToggle />
-        </Space>
-      </Layout.Header>
-
-      <Layout>
-        <Layout.Sider
-          width={200}
-          style={{ background: 'transparent', paddingBlock: 'var(--wl-space-3)' }}
-        >
-          <Menu
-            mode="inline"
-            selectedKeys={[view]}
-            // 左右内缩交给主题里的 Menu.itemMarginInline，这里不要再叠一层 padding。
-            style={{ height: '100%', background: 'transparent', borderInlineEnd: 'none' }}
-            onClick={({ key }) => setView(key as ViewKey)}
-            items={MENU_ITEMS}
-          />
-        </Layout.Sider>
-
-        <Layout.Content
-          className="wl-scroll-y"
-          style={{
-            padding: 'var(--wl-layout-content-pad)',
-            paddingTop: 'var(--wl-space-3)',
-            background: 'transparent'
+        <div className="wl-brand">
+          <img src={appLogo} alt="万龙面板" />
+          {!collapsed && (
+            <div>
+              <div className="wl-brand-name">万龙面板</div>
+              <div className="wl-brand-caption">多账号自动化工作台</div>
+            </div>
+          )}
+        </div>
+        {!collapsed && <div className="wl-nav-caption">工作空间</div>}
+        <Menu
+          className="wl-main-menu"
+          mode="inline"
+          selectedKeys={[section.key]}
+          items={NAVIGATION.map(({ key, label, icon }) => ({ key, label, icon }))}
+          onClick={({ key }) => {
+            const next = NAVIGATION.find((item) => item.key === key)
+            if (next) setView(sectionViews.current[key] ?? next.views[0].key)
           }}
-        >
+        />
+        <div className="wl-sidebar-bottom">
+          {!collapsed && <span className="wl-sidebar-note">万龙 · 控制面板</span>}
+          <Tooltip title={collapsed ? '展开导航' : '收起导航'}>
+            <Button
+              type="text"
+              aria-label={collapsed ? '展开导航' : '收起导航'}
+              icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+              onClick={() => setCollapsed(!collapsed)}
+            />
+          </Tooltip>
+        </div>
+      </Layout.Sider>
+      <Layout className="wl-workspace">
+        <Layout.Header className="wl-workspace-header">
+          <div>
+            <h1 className="wl-section-title">{section.label}</h1>
+            <div className="wl-section-description">{section.description}</div>
+          </div>
+          <Space size={10}>
+            <SemanticTag tone={instancesFull ? 'warning' : 'info'} title="已开机实例数 / 并发上限">
+              在线 {upCount}/{settings.maxConcurrentInstances}
+            </SemanticTag>
+            <SemanticTag tone={activeRuns > 0 ? 'accent' : 'neutral'} title="正在执行的任务数">
+              执行中 {activeRuns}
+            </SemanticTag>
+            <HealthBadge />
+            <ThemeToggle />
+          </Space>
+        </Layout.Header>
+        {section.views.length > 1 && (
+          <nav className="wl-section-nav" aria-label={`${section.label}页面`}>
+            {section.views.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                aria-current={view === item.key ? 'page' : undefined}
+                onClick={() => setView(item.key)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+        )}
+        <Layout.Content className="wl-workspace-content wl-scroll-y">
           {bootstrapped && bootError && (
             <Alert
               type="warning"
@@ -195,7 +199,7 @@ export default function App(): React.JSX.Element {
               closable
               style={{ marginBottom: 'var(--wl-space-4)' }}
               message="部分数据没能载入"
-              description={`${bootError}\n面板本身可以正常使用，等主进程对应模块接线完成后点各页的「刷新」即可。`}
+              description={`${bootError} 请刷新当前页面，或到设置中检查运行环境。`}
             />
           )}
           <CurrentView view={view} />

@@ -8,7 +8,8 @@ import { CH } from '@shared/ipc'
 import type { ResolvedPaths } from '@shared/domain'
 import { emit, handle } from '@main/ipc'
 import { runHealthCheck } from '@main/health'
-import { DIRECTORY_PATH_KEYS, ensureDirs, resolvePaths } from '@main/paths'
+import { DIRECTORY_PATH_KEYS, ensureDirs } from '@main/paths'
+import { getRuntimeSettings } from '@main/config'
 import type { MainDeps } from './index'
 
 const DIR_KEYS = new Set<string>(DIRECTORY_PATH_KEYS)
@@ -19,7 +20,7 @@ export function registerAppHandlers(deps: MainDeps): void {
   handle(CH.appSaveSettings, async (patch) => {
     const next = await deps.saveSettings(patch)
     // dataDir 可能被改到一个全新的位置，先把目录建好再让别的模块去写。
-    await ensureDirs(resolvePaths(next))
+    await ensureDirs(deps.paths())
     return next
   })
 
@@ -41,7 +42,7 @@ export function registerAppHandlers(deps: MainDeps): void {
   })
 
   handle(CH.appHealth, async () => {
-    const report = await runHealthCheck(deps.settings())
+    const report = await runHealthCheck(getRuntimeSettings())
     emit('app:health', report)
     return report
   })

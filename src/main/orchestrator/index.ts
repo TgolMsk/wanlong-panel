@@ -16,17 +16,12 @@ import type { BrowserWindow } from 'electron'
 import { makeId } from '@shared/defaults'
 import { AppError } from '@shared/errors'
 import type { Account, AppSettings, ResolvedPaths } from '@shared/domain'
-import type {
-  RunHandle,
-  RunSnapshot,
-  RunStatus,
-  ScriptDef,
-  StartRunRequest
-} from '@shared/script'
+import type { RunHandle, RunSnapshot, RunStatus, ScriptDef, StartRunRequest } from '@shared/script'
 import type { WorkerAttachPayload, WorkerToMain } from '@shared/worker'
 import { appendLogs } from '../store/logs'
 import { saveShot } from '../store/shots'
 import { RunWorker, STOP_GRACE_MS } from './pool'
+import { instanceAccess } from '@main/instanceAccess'
 
 /** 启动一次执行所需要的外部依赖，由模块 e 在 IPC handler 里注入。 */
 export interface RunDeps {
@@ -72,17 +67,17 @@ interface RunEntry {
   finished: boolean
   exited: Promise<void>
   resolveExited: () => void
+  releaseAccess: () => void
+  workerExited: boolean
 }
 
-const TERMINAL: ReadonlySet<RunStatus> = new Set<RunStatus>([
-  'succeeded',
-  'failed',
-  'aborted'
-])
+const TERMINAL: ReadonlySet<RunStatus> = new Set<RunStatus>(['succeeded', 'failed', 'aborted'])
 
 class OrchestratorImpl implements Orchestrator {
   private readonly runs = new Map<string, RunEntry>()
   private readonly listeners = new Set<(s: RunSnapshot) => void>()
+  private readonly pending = new Map<number, string>()
+  private shuttingDown = false
 
   // ── 查询 ────────────────────────────────────────────────────────────────
 
@@ -98,8 +93,10 @@ class OrchestratorImpl implements Orchestrator {
   }
 
   runIdOfInstance(instanceIndex: number): string | null {
+    const pending = this.pending.get(instanceIndex)
+    if (pending) return pending
     for (const e of this.runs.values()) {
-      if (!e.finished && e.snapshot.instanceIndex === instanceIndex) return e.handle.runId
+      if (!e.workerExited && e.snapshot.instanceIndex === instanceIndex) return e.handle.runId
     }
     return null
   }
@@ -124,21 +121,19 @@ class OrchestratorImpl implements Orchestrator {
 
   // ── 启动 ────────────────────────────────────────────────────────────────
 
-  async start(
-    win: BrowserWindow | null,
-    req: StartRunRequest,
-    deps: RunDeps
-  ): Promise<RunHandle> {
+  async start(win: BrowserWindow | null, req: StartRunRequest, deps: RunDeps): Promise<RunHandle> {
     const { settings, paths } = deps
+    if (this.shuttingDown) throw new AppError('RUN_ABORTED', '应用正在退出，不能启动新任务。')
 
     // ① 并发上限。实测单实例跑 Unity 游戏 45.7% CPU + 1.2GB RSS，超过 4 个会把机器打满。
-    const active = [...this.runs.values()].filter((r) => !r.finished)
+    const active = [...this.runs.values()].filter((r) => !r.workerExited)
+    const activeCount = active.length + this.pending.size
     const limit = Math.max(1, settings.maxConcurrentInstances)
-    if (active.length >= limit) {
+    if (activeCount >= limit) {
       throw new AppError(
         'CONCURRENCY_LIMIT',
         `同时运行的实例已达上限 ${limit} 个。请先停掉一个正在跑的任务，或到设置里调高上限（不建议超过 4 个）。`,
-        { active: active.length, limit }
+        { active: activeCount, limit }
       )
     }
 
@@ -152,100 +147,114 @@ class OrchestratorImpl implements Orchestrator {
       )
     }
 
-    // ③ 设备 + 脚本 + 账号
-    const serial = await deps.resolveSerial(req.instanceIndex)
-    const script = await deps.loadScript(req.scriptId)
-    const account = req.accountId && deps.loadAccount ? await deps.loadAccount(req.accountId) : null
-
     const runId = makeId('run')
-    const payload: WorkerAttachPayload = {
-      runId,
-      instanceIndex: req.instanceIndex,
-      serial,
-      script,
-      params: mergeParams(script, account, req),
-      request: req,
-      settings: { ...settings, shotPolicy: req.shotPolicy ?? settings.shotPolicy },
-      paths: {
-        adbPath: paths.adbPath,
-        templatesDir: paths.templatesDir,
-        shotsDir: paths.shotsDir,
-        logsDir: paths.logsDir
-      },
-      accountId: account?.id ?? req.accountId ?? null,
-      accountName: account?.name ?? null
-    }
-
-    const snapshot: RunSnapshot = {
-      runId,
-      scriptId: script.id,
-      scriptName: script.name,
-      instanceIndex: req.instanceIndex,
-      serial,
-      accountId: payload.accountId,
-      accountName: payload.accountName,
-      status: 'starting',
-      startedAt: Date.now(),
-      endedAt: null,
-      stepDone: 0,
-      stepTotal: script.loop ? null : script.steps.length,
-      currentStepId: null,
-      currentStepName: null,
-      iteration: 0,
-      error: null,
-      stats: {
-        captures: 0,
-        matches: 0,
-        matchHits: 0,
-        taps: 0,
-        retries: 0,
-        lastTickMs: 0,
-        avgCaptureMs: 0
-      }
-    }
-
-    let resolveExited!: () => void
-    const exited = new Promise<void>((r) => {
-      resolveExited = r
-    })
-
-    const worker = new RunWorker({
-      runId,
-      instanceIndex: req.instanceIndex,
-      // runner.js 与主进程入口同在 out/main/ 下（见 electron.vite.config.ts 的双入口配置）。
-      runnerPath: join(__dirname, 'runner.js'),
-      onMessage: (m) => this.onWorkerMessage(runId, m),
-      onExit: (code) => this.onWorkerExit(runId, code)
-    })
-
-    const entry: RunEntry = {
-      handle: { runId, instanceIndex: req.instanceIndex, scriptId: script.id },
-      worker,
-      snapshot,
-      paths,
-      finished: false,
-      exited,
-      resolveExited
-    }
-    this.runs.set(runId, entry)
-    this.notify(snapshot)
-
+    const releaseAccess = instanceAccess.acquire(req.instanceIndex, '运行脚本')
+    this.pending.set(req.instanceIndex, runId)
+    let transferred = false
     try {
-      await worker.waitReady()
-      await worker.attach(win, payload)
-      worker.post({ type: 'start' })
-    } catch (e) {
-      // 启动阶段失败：把进程收干净，并把失败原因写进快照推给面板。
-      worker.kill()
-      const err = AppError.from(e, 'UNKNOWN')
-      this.markFinished(entry, 'failed', err.message)
-      throw err
-    }
+      // ③ 占用已登记，再异步读取设备、脚本、账号。
+      const serial = await deps.resolveSerial(req.instanceIndex)
+      const script = await deps.loadScript(req.scriptId)
+      const account =
+        req.accountId && deps.loadAccount ? await deps.loadAccount(req.accountId) : null
 
-    snapshot.status = 'running'
-    this.notify(snapshot)
-    this.prune()
-    return entry.handle
+      if (this.shuttingDown) throw new AppError('RUN_ABORTED', '应用正在退出，任务启动已取消。')
+      const payload: WorkerAttachPayload = {
+        runId,
+        instanceIndex: req.instanceIndex,
+        serial,
+        script,
+        params: mergeParams(script, account, req),
+        request: req,
+        settings: { ...settings, shotPolicy: req.shotPolicy ?? settings.shotPolicy },
+        paths: {
+          adbPath: paths.adbPath,
+          templatesDir: paths.templatesDir,
+          shotsDir: paths.shotsDir,
+          logsDir: paths.logsDir
+        },
+        accountId: account?.id ?? req.accountId ?? null,
+        accountName: account?.name ?? null
+      }
+
+      const snapshot: RunSnapshot = {
+        runId,
+        scriptId: script.id,
+        scriptName: script.name,
+        instanceIndex: req.instanceIndex,
+        serial,
+        accountId: payload.accountId,
+        accountName: payload.accountName,
+        status: 'starting',
+        startedAt: Date.now(),
+        endedAt: null,
+        stepDone: 0,
+        stepTotal: script.loop ? null : script.steps.length,
+        currentStepId: null,
+        currentStepName: null,
+        iteration: 0,
+        error: null,
+        stats: {
+          captures: 0,
+          matches: 0,
+          matchHits: 0,
+          taps: 0,
+          retries: 0,
+          lastTickMs: 0,
+          avgCaptureMs: 0
+        }
+      }
+
+      let resolveExited!: () => void
+      const exited = new Promise<void>((r) => {
+        resolveExited = r
+      })
+
+      const worker = new RunWorker({
+        runId,
+        instanceIndex: req.instanceIndex,
+        // runner.js 与主进程入口同在 out/main/ 下（见 electron.vite.config.ts 的双入口配置）。
+        runnerPath: join(__dirname, 'runner.js'),
+        onMessage: (m) => this.onWorkerMessage(runId, m),
+        onExit: (code) => this.onWorkerExit(runId, code)
+      })
+
+      const entry: RunEntry = {
+        handle: { runId, instanceIndex: req.instanceIndex, scriptId: script.id },
+        worker,
+        snapshot,
+        paths,
+        finished: false,
+        exited,
+        resolveExited,
+        releaseAccess,
+        workerExited: false
+      }
+      this.runs.set(runId, entry)
+      transferred = true
+      this.pending.delete(req.instanceIndex)
+      this.notify(snapshot)
+
+      try {
+        await worker.waitReady()
+        await worker.attach(win, payload)
+        worker.post({ type: 'start' })
+      } catch (e) {
+        // 启动阶段失败：把进程收干净，并把失败原因写进快照推给面板。
+        worker.kill()
+        const err = AppError.from(e, 'UNKNOWN')
+        this.markFinished(entry, 'failed', err.message)
+        throw err
+      }
+
+      snapshot.status = 'running'
+      this.notify(snapshot)
+      this.prune()
+      return entry.handle
+    } finally {
+      this.pending.delete(req.instanceIndex)
+      if (!transferred) releaseAccess()
+    }
   }
 
   // ── 控制 ────────────────────────────────────────────────────────────────
@@ -278,7 +287,8 @@ class OrchestratorImpl implements Orchestrator {
   }
 
   async shutdownAll(timeoutMs = STOP_GRACE_MS + 2000): Promise<void> {
-    const active = [...this.runs.values()].filter((r) => !r.finished)
+    this.shuttingDown = true
+    const active = [...this.runs.values()].filter((r) => !r.workerExited)
     if (active.length === 0) return
     for (const e of active) e.worker.requestStop(STOP_GRACE_MS)
     await Promise.race([
@@ -339,6 +349,8 @@ class OrchestratorImpl implements Orchestrator {
   private onWorkerExit(runId: string, code: number): void {
     const e = this.runs.get(runId)
     if (!e) return
+    e.workerExited = true
+    e.releaseAccess()
     if (!e.finished) {
       // 没走到 finished 就退了 = 崩了/被杀了。要么是脚本把进程搞挂了，要么是被停止超时强杀。
       const stopping = e.snapshot.status === 'stopping'
@@ -349,6 +361,7 @@ class OrchestratorImpl implements Orchestrator {
       )
     }
     e.resolveExited()
+    this.prune()
   }
 
   private markFinished(e: RunEntry, status: RunStatus, error: string | null): void {
@@ -363,20 +376,20 @@ class OrchestratorImpl implements Orchestrator {
       error: error ?? e.snapshot.error
     }
     this.notify(e.snapshot)
-    e.resolveExited()
     this.prune()
   }
 
   private mustGet(runId: string): RunEntry {
     const e = this.runs.get(runId)
-    if (!e) throw new AppError('RUN_NOT_FOUND', `找不到执行记录：${runId}（可能已经结束并被清理）。`)
+    if (!e)
+      throw new AppError('RUN_NOT_FOUND', `找不到执行记录：${runId}（可能已经结束并被清理）。`)
     return e
   }
 
   /** 只保留最近 MAX_FINISHED_KEPT 条已结束的记录，避免长时间挂机后内存里全是历史快照。 */
   private prune(): void {
     const done = [...this.runs.values()]
-      .filter((r) => r.finished)
+      .filter((r) => r.finished && r.workerExited)
       .sort((a, b) => (b.snapshot.endedAt ?? 0) - (a.snapshot.endedAt ?? 0))
     for (const e of done.slice(MAX_FINISHED_KEPT)) this.runs.delete(e.handle.runId)
   }

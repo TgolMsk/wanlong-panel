@@ -33,7 +33,7 @@ import type { AndroidKey } from '@shared/script'
 import type { MatchResult } from '@shared/vision'
 import type { ManualInput } from '@shared/ipc'
 import { hasWorkerPort, postToWorker, useWorkerPort } from '../ipc/useWorkerPort'
-import { tryCall, toast } from '../ipc/useIpc'
+import { call, tryCall, toast } from '../ipc/useIpc'
 import { SemanticTag } from '../components/StatusTag'
 import { WL_CANVAS } from '../styles/antd-theme'
 
@@ -59,22 +59,27 @@ export interface PreviewPaneProps {
   /** 面板是否可见。false 时停止取帧并通知 worker 关流。 */
   active?: boolean
   height?: number
+  loginSessionId?: string
 }
 
 export default function PreviewPane({
   instanceIndex,
   runId = null,
   active = true,
-  height = 460
+  height = 460,
+  loginSessionId
 }: PreviewPaneProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const bitmapRef = useRef<ImageBitmap | null>(null)
   const matchesRef = useRef<MatchResult[]>([])
   const dragRef = useRef<{ x: number; y: number; t: number } | null>(null)
   const pollingRef = useRef(false)
+  const disposedRef = useRef(false)
   const fpsWindowRef = useRef<number[]>([])
 
-  const [autoPoll, setAutoPoll] = useState(false)
+  const [autoPoll, setAutoPoll] = useState(!!loginSessionId)
+  const sendingRef = useRef(false)
+  const [sending, setSending] = useState(false)
   const [showMatches, setShowMatches] = useState(true)
   const [mode, setMode] = useState<'tap' | 'swipe'>('tap')
   const [fps, setFps] = useState(0)
@@ -129,6 +134,10 @@ export default function PreviewPane({
 
   const setBitmap = useCallback(
     (bmp: ImageBitmap, meta: { deviceWidth: number; deviceHeight: number; capturedAt: number }) => {
+      if (disposedRef.current) {
+        bmp.close()
+        return
+      }
       bitmapRef.current?.close()
       bitmapRef.current = bmp
       const now = performance.now()
@@ -156,7 +165,9 @@ export default function PreviewPane({
 
   // 卸载时释放最后一帧，避免 ImageBitmap 泄漏（每帧几 MB）。
   useEffect(() => {
+    disposedRef.current = false
     return () => {
+      disposedRef.current = true
       bitmapRef.current?.close()
       bitmapRef.current = null
     }
@@ -167,7 +178,7 @@ export default function PreviewPane({
   useWorkerPort({
     onFrame: (f) => {
       if (!active) return
-      if (runId && f.runId !== runId) return
+      if (!runId || f.runId !== runId) return
       void createImageBitmap(new Blob([f.jpeg], { type: 'image/jpeg' }))
         .then((bmp) =>
           setBitmap(bmp, {
@@ -179,7 +190,7 @@ export default function PreviewPane({
         .catch((e: unknown) => setLastError(`预览帧解码失败：${String(e)}`))
     },
     onMatches: (rid, results) => {
-      if (runId && rid !== runId) return
+      if (!runId || rid !== runId) return
       matchesRef.current = results
       draw()
     }
@@ -198,7 +209,7 @@ export default function PreviewPane({
   // ── 轮询模式：device:capture ────────────────────────────────────────────
 
   const captureOnce = useCallback(async (): Promise<void> => {
-    if (instanceIndex === null) return
+    if (instanceIndex === null || disposedRef.current) return
     if (pollingRef.current) return
     pollingRef.current = true
     setCapturing(true)
@@ -270,27 +281,45 @@ export default function PreviewPane({
         to: { x: end.x, y: end.y },
         durationMs: Math.max(120, Math.min(1200, held))
       }
-      await tryCall('device:swipe', input)
+      if (loginSessionId)
+        await tryCall('login:input', loginSessionId, {
+          kind: 'swipe',
+          at: input.at!,
+          to: input.to!,
+          durationMs: input.durationMs!
+        })
+      else await tryCall('device:swipe', input)
       return
     }
     const input: ManualInput = { instanceIndex, at: { x: end.x, y: end.y } }
-    await tryCall('device:tap', input)
+    if (loginSessionId) await tryCall('login:input', loginSessionId, { kind: 'tap', at: input.at! })
+    else await tryCall('device:tap', input)
     // 点完立刻补一帧，让人看到反馈（直连模式下 worker 自己会推）。
     if (!live) setTimeout(() => void captureOnce(), 350)
   }
 
   const sendKey = async (): Promise<void> => {
     if (instanceIndex === null) return
-    await tryCall('device:key', { instanceIndex, key })
+    if (loginSessionId) await tryCall('login:input', loginSessionId, { kind: 'key', key })
+    else await tryCall('device:key', { instanceIndex, key })
     if (!live) setTimeout(() => void captureOnce(), 350)
   }
 
   const sendText = async (): Promise<void> => {
-    if (instanceIndex === null || !textToSend) return
-    const ok = await tryCall('device:text', { instanceIndex, text: textToSend })
-    if (ok !== undefined) {
+    if (instanceIndex === null || !textToSend || sendingRef.current) return
+    sendingRef.current = true
+    setSending(true)
+    const text = textToSend
+    setTextToSend('')
+    try {
+      if (loginSessionId) await call('login:input', loginSessionId, { kind: 'text', text })
+      else await call('device:text', { instanceIndex, text })
       toast().success('文本已发送')
-      setTextToSend('')
+    } catch {
+      /* call 已提示 */
+    } finally {
+      sendingRef.current = false
+      setSending(false)
     }
   }
 
@@ -424,20 +453,43 @@ export default function PreviewPane({
         <Button size="small" onClick={() => void sendKey()}>
           发送按键
         </Button>
-        <Input
+        {loginSessionId ? (
+          <Input.Password
+            size="small"
+            style={{ width: 310 }}
+            autoComplete="off"
+            maxLength={32}
+            inputMode="numeric"
+            placeholder="先点游戏输入框，再填写手机号／验证码"
+            value={textToSend}
+            onChange={(e) => setTextToSend(e.target.value)}
+            onPressEnter={() => void sendText()}
+          />
+        ) : (
+          <Input
+            size="small"
+            style={{ width: 240 }}
+            placeholder="输入文本后回车发送"
+            value={textToSend}
+            onChange={(e) => setTextToSend(e.target.value)}
+            onPressEnter={() => void sendText()}
+          />
+        )}
+        <Button
           size="small"
-          style={{ width: 240 }}
-          placeholder="输入文本后回车发送"
-          value={textToSend}
-          onChange={(e) => setTextToSend(e.target.value)}
-          onPressEnter={() => void sendText()}
-        />
-        <Button size="small" onClick={() => void sendText()} disabled={!textToSend}>
+          loading={sending}
+          onClick={() => void sendText()}
+          disabled={!textToSend}
+        >
           发送文本
         </Button>
-        <Tooltip title="中文必须依赖 ADBKeyboard 输入法（adb 自带的 input text 会静默丢掉非 ASCII 字符）。没装的话到「设置」页一键安装。">
-          <span className="wl-micro">中文输入需要 ADBKeyboard</span>
-        </Tooltip>
+        {loginSessionId ? (
+          <span className="wl-micro">仅发送数字，不保存验证码</span>
+        ) : (
+          <Tooltip title="中文必须依赖 ADBKeyboard 输入法（adb 自带的 input text 会静默丢掉非 ASCII 字符）。没装的话到「设置」页一键安装。">
+            <span className="wl-micro">中文输入需要 ADBKeyboard</span>
+          </Tooltip>
+        )}
       </Space>
     </Space>
   )

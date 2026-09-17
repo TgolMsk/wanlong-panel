@@ -1,0 +1,171 @@
+.wl-shell {
+  height: 100vh;
+  overflow: hidden;
+}
+.wl-shell .wl-sidebar {
+  background: var(--wl-bg-blur);
+  border-right: 1px solid var(--wl-border-subtle);
+}
+.wl-sidebar .ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+}
+.wl-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--wl-space-3);
+  height: 88px;
+  padding: var(--wl-space-5);
+  flex-shrink: 0;
+}
+.wl-brand img {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+}
+.wl-brand-name {
+  font-size: var(--wl-fs-heading);
+  font-weight: var(--wl-fw-semibold);
+  color: var(--wl-text-heading);
+  white-space: nowrap;
+}
+.wl-brand-caption {
+  color: var(--wl-text-secondary);
+  font-size: var(--wl-fs-micro);
+  margin-top: var(--wl-space-1);
+}
+.wl-nav-caption {
+  padding: var(--wl-space-3) var(--wl-space-6);
+  color: var(--wl-text-tertiary);
+  font-size: var(--wl-fs-micro);
+}
+.wl-shell .wl-main-menu {
+  background: transparent;
+  border-inline-end: none;
+}
+.wl-main-menu .ant-menu-item {
+  margin-bottom: var(--wl-space-2);
+}
+.wl-sidebar-bottom {
+  margin-top: auto;
+  padding: var(--wl-space-4);
+  border-top: 1px solid var(--wl-border-subtle);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--wl-space-2);
+}
+.wl-sidebar-note {
+  color: var(--wl-text-secondary);
+  font-size: var(--wl-fs-micro);
+}
+.wl-shell .wl-workspace {
+  min-width: 0;
+}
+.wl-shell .wl-workspace-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--wl-space-4);
+  padding: var(--wl-space-4) var(--wl-space-6);
+  height: 88px;
+  line-height: normal;
+  background: var(--wl-bg-blur);
+  border-bottom: 1px solid var(--wl-border-subtle);
+}
+.wl-section-title {
+  margin: 0;
+  color: var(--wl-text-heading);
+  font-size: var(--wl-fs-heading);
+  font-weight: var(--wl-fw-semibold);
+}
+.wl-section-description {
+  color: var(--wl-text-secondary);
+  font-size: var(--wl-fs-label);
+  margin-top: var(--wl-space-2);
+}
+.wl-section-nav {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--wl-space-2);
+  padding: var(--wl-space-3) var(--wl-space-6);
+  border-bottom: 1px solid var(--wl-border-subtle);
+}
+.wl-section-nav button {
+  border: 1px solid transparent;
+  border-radius: var(--wl-radius-sm);
+  padding: var(--wl-space-2) var(--wl-space-4);
+  background: transparent;
+  color: var(--wl-text-secondary);
+  cursor: pointer;
+  font: inherit;
+}
+.wl-section-nav button:hover {
+  background: var(--wl-bg-surface-hover);
+  color: var(--wl-text);
+}
+.wl-section-nav button[aria-current='page'] {
+  background: var(--wl-accent-soft);
+  border-color: var(--wl-accent-border);
+  color: var(--wl-accent);
+  font-weight: var(--wl-fw-semibold);
+}
+.wl-section-nav button:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: 2px;
+}
+.wl-shell .wl-workspace-content {
+  min-height: 0;
+  padding: var(--wl-space-5) var(--wl-space-6);
+  background: transparent;
+}
+.wl-sidebar-collapsed .wl-brand {
+  justify-content: center;
+  padding-inline: 0;
+}
+.wl-sidebar-collapsed .wl-sidebar-bottom {
+  justify-content: center;
+  padding-inline: var(--wl-space-2);
+}
+.wl-instance-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--wl-space-3);
+  margin-bottom: var(--wl-space-4);
+  flex-wrap: wrap;
+}
+.wl-instance-toolbar .ant-input-affix-wrapper {
+  max-width: 260px;
+}
+.wl-instance-name {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-1);
+  min-width: 0;
+}
+.wl-instance-name small {
+  color: var(--wl-text-secondary);
+}
+.wl-device-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--wl-space-5);
+  padding: var(--wl-space-3) var(--wl-space-4);
+  color: var(--wl-text-secondary);
+}
+.wl-device-details strong {
+  color: var(--wl-text);
+  font-weight: var(--wl-fw-medium);
+}
+@media (max-width: 1150px) {
+  .wl-section-description {
+    display: none;
+  }
+  .wl-shell .wl-workspace-header {
+    padding-inline: var(--wl-space-4);
+  }
+  .wl-shell .wl-workspace-content {
+    padding-inline: var(--wl-space-4);
+  }
+}

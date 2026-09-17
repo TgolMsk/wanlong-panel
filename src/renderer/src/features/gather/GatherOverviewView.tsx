@@ -109,14 +109,12 @@ export default function GatherOverviewView(): React.JSX.Element {
     <div className="wlg-page">
       <div className="wlg-page-head">
         <div className="wlg-page-head-text">
-          <h1 className="wl-title">群控倒计时</h1>
-          <span className="wl-label">
-            所有实例的在途队伍与队列占用。倒计时在本地每秒递推，不会为了刷新数字去截图。
-          </span>
+          <h1 className="wl-title">采集总览</h1>
+          <span className="wl-label">查看各账号的队伍进度、空闲队列与下一次采集时间。</span>
         </div>
         <div className="wlg-actions-btns">
           <Button icon={<ReloadOutlined />} onClick={() => void load()}>
-            重新拉取调度状态
+            刷新状态
           </Button>
           <Button onClick={() => void refreshInstances(true)}>刷新实例列表</Button>
         </div>
@@ -178,7 +176,7 @@ export default function GatherOverviewView(): React.JSX.Element {
             label="执行中任务"
             value={activeRuns}
             unit="个"
-            hint="orchestrator 里仍占着实例的执行数，同一实例同时只能跑一个"
+            hint="正在运行或暂停中的脚本任务"
           />
           {(sum.unreadableMarches > 0 || sum.failedInstances > 0) && (
             <StatTile
@@ -215,7 +213,7 @@ export default function GatherOverviewView(): React.JSX.Element {
         <div className="wl-glass wlg-empty">
           <div className="wlg-empty-title">没有可显示的实例</div>
           <div className="wlg-empty-desc">
-            面板还没有拉到 MuMu 实例列表。到「实例」页刷新一次，或确认 mumutool 路径配置正确。
+            到「设备与账号」添加或刷新实例；若仍未显示，请在设置中检查模拟器路径。
           </div>
         </div>
       ) : (

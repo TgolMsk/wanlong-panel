@@ -23,7 +23,7 @@ import {
 } from '@shared/constants'
 import { AppError } from '@shared/errors'
 import { CH } from '@shared/ipc'
-import type { CaptureOptions, CaptureShot } from '@shared/ipc'
+import type { CaptureOptions, CaptureShot, PngCaptureShot } from '@shared/ipc'
 import type { DeviceInfo, MumuInstance } from '@shared/domain'
 import type { Point, RawFrame } from '@shared/vision'
 import { handle } from '@main/ipc'
@@ -53,6 +53,13 @@ export function registerDeviceHandlers(deps: MainDeps): void {
     const t0 = Date.now()
     const frame = await deps.adb.capture(dev.serial)
     return rawFrameToShot(frame, opts, Date.now() - t0)
+  })
+
+  handle(CH.deviceCapturePng, async (index, width = 0) => {
+    const dev = await ensureDevice(deps, index)
+    const t0 = Date.now()
+    const frame = await deps.adb.capture(dev.serial)
+    return rawFrameToPngShot(frame, width, Date.now() - t0)
   })
 
   handle(CH.deviceTap, async (input) => {
@@ -208,6 +215,31 @@ export async function rawFrameToShot(
     jpeg: toArrayBuffer(data),
     jpegWidth: info.width,
     jpegHeight: info.height,
+    capturedAt: frame.capturedAt,
+    elapsedMs
+  }
+}
+
+/** 模板主帧、差分帧均从 raw 直接编码 PNG，避免 JPEG 损失字形边缘和差分信息。 */
+export async function rawFrameToPngShot(
+  frame: RawFrame,
+  width = 0,
+  elapsedMs = 0
+): Promise<PngCaptureShot> {
+  if (frame.data.byteLength !== frame.width * frame.height * 4) {
+    throw new AppError('CAPTURE_BAD_FRAME', '模板截图数据长度与分辨率不一致。')
+  }
+  const input = Buffer.from(frame.data.buffer, frame.data.byteOffset, frame.data.byteLength)
+  const pipeline = sharp(input, { raw: { width: frame.width, height: frame.height, channels: 4 } })
+  const target = width === 0 ? frame.width : clampInt(width, 16, frame.width)
+  if (target !== frame.width) pipeline.resize({ width: target, fit: 'inside' })
+  const { data, info } = await pipeline.png().toBuffer({ resolveWithObject: true })
+  return {
+    width: frame.width,
+    height: frame.height,
+    png: toArrayBuffer(data),
+    imageWidth: info.width,
+    imageHeight: info.height,
     capturedAt: frame.capturedAt,
     elapsedMs
   }

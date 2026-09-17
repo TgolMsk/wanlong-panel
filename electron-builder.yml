@@ -37,6 +37,7 @@ asarUnpack:
 # 未做代码签名：首次运行安装包时 SmartScreen 会提示「未知发布者」，属预期，点「仍要运行」即可。
 # extraResources 在 Windows 上落到 <安装目录>\resources\resources\，paths.ts 的 resourcesDir() 同样命中。
 win:
+  icon: resources/brand/app-icon.ico
   target:
     - target: nsis
       arch:
@@ -56,6 +57,7 @@ portable:
   artifactName: ${productName}-${version}-portable-${arch}.${ext}
 
 mac:
+  icon: resources/brand/app-icon.icns
   category: public.app-category.developer-tools
   target:
     - target: dmg

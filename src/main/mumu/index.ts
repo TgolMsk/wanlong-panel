@@ -214,6 +214,7 @@ export function createRegistry(): InstanceRegistry {
       .map((i) =>
         [
           i.index,
+          i.identity ?? '-',
           i.name,
           i.state,
           i.adbPort ?? '-',

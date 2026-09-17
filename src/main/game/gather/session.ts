@@ -148,7 +148,23 @@ export class GatherSession {
   private captureCount = 0
 
   constructor(opts: GatherSessionOptions) {
-    this.io = opts.io
+    const guard = async <T>(fn: () => Promise<T>): Promise<T> => {
+      this.ensureAlive()
+      return fn()
+    }
+    const io = opts.io
+    this.io = {
+      capture: () => guard(() => io.capture()),
+      tap: (x, y) => guard(() => io.tap(x, y)),
+      tapMany: (points, gap) => guard(() => io.tapMany(points, gap)),
+      swipe: (x1, y1, x2, y2, ms) => guard(() => io.swipe(x1, y1, x2, y2, ms)),
+      key: (k) => guard(() => io.key(k)),
+      launchApp: (pkg, cold) => guard(() => io.launchApp(pkg, cold)),
+      foregroundPackage: () => guard(() => io.foregroundPackage()),
+      ensureGameForeground: io.ensureGameForeground
+        ? (pkg) => guard(() => io.ensureGameForeground!(pkg))
+        : undefined
+    }
     this.templates = opts.templates
     this.config = opts.config
     this.refWidth = opts.refWidth ?? opts.templates.refWidth ?? REF_WIDTH

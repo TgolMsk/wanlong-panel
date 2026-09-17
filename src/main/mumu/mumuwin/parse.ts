@@ -65,6 +65,7 @@ export function mumuWinRawToInstance(
   const broken = !up && (raw.errorCode !== 0 || raw.launchErrCode !== 0)
   return {
     index: raw.index,
+    identity: raw.createdTimestamp ? `mumu:${raw.createdTimestamp}` : null,
     name: raw.name || `MuMu 实例 ${raw.index}`,
     state: broken ? 'error' : !up ? 'stopped' : raw.androidStarted ? 'running' : 'starting',
     adbPort,
@@ -132,7 +133,15 @@ function toRaw(o: Record<string, unknown>, keyHint: string | null): MumuWinInsta
     launchErrCode: toInt(o['launch_err_code']) ?? 0,
     launchErrMsg: typeof o['launch_err_msg'] === 'string' ? o['launch_err_msg'] : '',
     androidVersion: typeof o['android_version'] === 'string' ? o['android_version'] : null,
-    diskSizeBytes: toPosInt(o['disk_size_bytes'])
+    diskSizeBytes: toPosInt(o['disk_size_bytes']),
+    createdTimestamp:
+      typeof o['created_timestamp'] === 'string' && /^\d+$/.test(o['created_timestamp'])
+        ? o['created_timestamp']
+        : typeof o['created_timestamp'] === 'number' &&
+            Number.isSafeInteger(o['created_timestamp']) &&
+            o['created_timestamp'] > 0
+          ? String(o['created_timestamp'])
+          : null
   }
 }
 

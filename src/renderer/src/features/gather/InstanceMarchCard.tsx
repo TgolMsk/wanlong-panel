@@ -125,6 +125,11 @@ export function InstanceMarchCard({
       </header>
 
       <div className="wlg-card-body">
+        {!state.auto && state.operating && (
+          <div className="wl-micro" role="status">
+            设备操作正在收尾，自动派遣已关闭。
+          </div>
+        )}
         {/* 被异常暂停时，红条永远顶在最上面 —— 这时候在途队伍是次要信息。 */}
         {paused && pause && (
           <PauseBanner
@@ -169,10 +174,7 @@ export function InstanceMarchCard({
         ) : neverSampled ? (
           <div className="wlg-empty">
             <div className="wlg-empty-title">尚未采样</div>
-            <div className="wlg-empty-desc">
-              还没有读过这个实例的「部队管理」面板。点右下角的「立即采样」读一次，
-              或者打开自动调度让它自己来。倒计时读到之后由面板本地递推， 不会为了刷新数字反复截图。
-            </div>
+            <div className="wlg-empty-desc">点击「立即采样」读取队伍进度，或开启自动调度。</div>
           </div>
         ) : !state.error ? (
           <div className="wlg-empty">
@@ -233,7 +235,7 @@ export function InstanceMarchCard({
             size="small"
             icon={<ReloadOutlined />}
             loading={sampling || state.sampling}
-            disabled={sampling || state.sampling}
+            disabled={sampling || state.sampling || state.operating}
             onClick={() => onSample(state.instanceIndex)}
           >
             立即采样

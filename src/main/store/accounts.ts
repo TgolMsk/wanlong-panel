@@ -77,6 +77,10 @@ function unbindOthers(accounts: Account[], instanceIndex: number, keepId: string
   for (const a of accounts) {
     if (a.id !== keepId && a.instanceIndex === instanceIndex) {
       a.instanceIndex = null
+      if (a.setup) {
+        a.setup = { status: 'pending', instanceIdentity: null, verifiedAt: null }
+        a.enabled = false
+      }
       a.updatedAt = now
       changed = true
     }
@@ -107,9 +111,15 @@ export async function saveAccount(accountsDir: string, account: Account): Promis
     const idx = f.accounts.findIndex((a) => a.id === account.id)
     const merged: Account = {
       ...account,
+      // 初始化状态只能由登录流程更新，普通表单不能伪造或覆盖。
+      setup: idx >= 0 ? f.accounts[idx].setup : undefined,
       createdAt: idx >= 0 ? f.accounts[idx].createdAt : account.createdAt || now,
       updatedAt: now
     }
+    if (merged.setup && f.accounts[idx].instanceIndex !== merged.instanceIndex) {
+      merged.setup = { status: 'pending', instanceIdentity: null, verifiedAt: null }
+    }
+    if (merged.setup?.status === 'pending') merged.enabled = false
     if (idx >= 0) f.accounts[idx] = merged
     else f.accounts.push(merged)
 
@@ -148,6 +158,10 @@ export async function bindAccount(
     if (!target) throw new AppError('NOT_FOUND', `要绑定的账号不存在：${accountId}`)
 
     const now = Date.now()
+    if (target.setup && target.instanceIndex !== instanceIndex) {
+      target.setup = { status: 'pending', instanceIdentity: null, verifiedAt: null }
+      target.enabled = false
+    }
     target.instanceIndex = instanceIndex
     target.updatedAt = now
     if (instanceIndex !== null) unbindOthers(f.accounts, instanceIndex, accountId)
@@ -164,4 +178,89 @@ export async function accountOfInstance(
 ): Promise<Account | null> {
   const f = await readFileRaw(accountsDir)
   return f.accounts.find((a) => a.instanceIndex === instanceIndex) ?? null
+}
+
+/** 登录向导专用的原子绑定：只绑定空闲实例，不抢占其他账号。 */
+export async function prepareLoginAccount(
+  accountsDir: string,
+  input: {
+    accountId: string
+    name?: string
+    instanceIndex: number
+    identity: string | null
+    packageName: string
+  }
+): Promise<Account> {
+  return serialize(async () => {
+    const f = await readFileRaw(accountsDir)
+    let target = f.accounts.find((a) => a.id === input.accountId)
+    const owner = f.accounts.find(
+      (a) => a.instanceIndex === input.instanceIndex && a.id !== input.accountId
+    )
+    if (owner)
+      throw new AppError(
+        'INVALID_ARGUMENT',
+        `实例已绑定「${owner.name}」，请使用该账号继续登录，或先解除原绑定。`
+      )
+    if (
+      target?.instanceIndex !== null &&
+      target?.instanceIndex !== undefined &&
+      target.instanceIndex !== input.instanceIndex
+    ) {
+      throw new AppError('INVALID_ARGUMENT', '该账号已绑定其他实例，请先解除绑定。')
+    }
+    if (target?.packageName && target.packageName !== input.packageName) {
+      throw new AppError(
+        'INVALID_ARGUMENT',
+        '当前登录向导适用于《万龙觉醒》国服，请检查账号的游戏包名。'
+      )
+    }
+    const now = Date.now()
+    if (!target) {
+      if (!input.name?.trim()) throw new AppError('INVALID_ARGUMENT', '请填写新账号名称。')
+      target = {
+        id: input.accountId,
+        name: input.name.trim(),
+        instanceIndex: null,
+        enabled: false,
+        createdAt: now,
+        updatedAt: now
+      }
+      f.accounts.push(target)
+    }
+    target.instanceIndex = input.instanceIndex
+    target.packageName = input.packageName
+    target.setup = { status: 'pending', instanceIdentity: input.identity, verifiedAt: null }
+    target.enabled = false
+    target.updatedAt = now
+    await writeFileRaw(accountsDir, parseOrThrow(accountsFileSchema, f, '账号文件') as AccountsFile)
+    return target
+  })
+}
+
+/** 验证后再启用账号；绑定关系变化时拒绝把验证结果写到别的实例上。 */
+export async function completeLoginAccount(
+  accountsDir: string,
+  id: string,
+  instanceIndex: number,
+  identity: string | null
+): Promise<Account> {
+  return serialize(async () => {
+    const f = await readFileRaw(accountsDir)
+    const target = f.accounts.find((a) => a.id === id)
+    if (
+      !target ||
+      target.instanceIndex !== instanceIndex ||
+      !target.setup ||
+      target.setup.instanceIdentity !== identity
+    ) {
+      throw new AppError('INVALID_ARGUMENT', '账号绑定已改变，请重新开始登录向导。')
+    }
+    const now = Date.now()
+    target.setup = { status: 'ready', instanceIdentity: identity, verifiedAt: now }
+    target.enabled = true
+    target.updatedAt = now
+    await writeFileRaw(accountsDir, f)
+    return target
+  })
 }

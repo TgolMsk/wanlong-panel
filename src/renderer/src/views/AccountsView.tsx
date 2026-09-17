@@ -28,6 +28,7 @@ import { isInstanceUp, useAppStore } from '../store/appStore'
 import { call, tryCall, toast } from '../ipc/useIpc'
 import { SemanticTag } from '../components/StatusTag'
 import GlassCard from '../components/GlassCard'
+import AccountLoginDrawer from './AccountLoginDrawer'
 
 interface AccountFormValues {
   name: string
@@ -46,6 +47,7 @@ export default function AccountsView(): React.JSX.Element {
   const refreshAccounts = useAppStore((s) => s.refreshAccounts)
 
   const [editing, setEditing] = useState<Account | null>(null)
+  const [loginTarget, setLoginTarget] = useState<number | null>(null)
   const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -155,23 +157,33 @@ export default function AccountsView(): React.JSX.Element {
           <Space size={4}>
             <UserOutlined />
             <Typography.Link onClick={() => openEdit(r)}>{v}</Typography.Link>
-            {!r.enabled && <SemanticTag tone="neutral">已停用</SemanticTag>}
+            {r.setup?.status === 'pending' ? (
+              <SemanticTag tone="warning">待登录</SemanticTag>
+            ) : (
+              !r.enabled && <SemanticTag tone="neutral">已停用</SemanticTag>
+            )}
           </Space>
           {r.note && <span className="wl-micro">{r.note}</span>}
         </Space>
       )
     },
     {
-      title: '游戏包名',
-      dataIndex: 'packageName',
-      width: 200,
-      render: (v?: string) =>
-        v ? (
-          <Typography.Text className="wl-mono" code>
-            {v}
-          </Typography.Text>
+      title: '登录检查',
+      key: 'loginStatus',
+      width: 135,
+      render: (_: unknown, r) =>
+        r.setup?.status === 'ready' ? (
+          <Tooltip
+            title={
+              r.setup.verifiedAt
+                ? `检查于 ${new Date(r.setup.verifiedAt).toLocaleString()}`
+                : undefined
+            }
+          >
+            <SemanticTag tone="success">已检查</SemanticTag>
+          </Tooltip>
         ) : (
-          <Typography.Text type="secondary">—</Typography.Text>
+          <Typography.Text type="secondary">{r.setup ? '等待登录' : '未检查'}</Typography.Text>
         )
     },
     {
@@ -215,6 +227,7 @@ export default function AccountsView(): React.JSX.Element {
         <Switch
           size="small"
           checked={v}
+          disabled={r.setup?.status === 'pending'}
           onChange={async (checked) => {
             const next: Account = { ...r, enabled: checked, updatedAt: Date.now() }
             const saved = await tryCall('account:save', next)
@@ -226,9 +239,16 @@ export default function AccountsView(): React.JSX.Element {
     {
       title: '操作',
       key: 'actions',
-      width: 150,
+      width: 230,
       render: (_: unknown, r) => (
         <Space size={4}>
+          <Button
+            size="small"
+            disabled={r.instanceIndex === null}
+            onClick={() => setLoginTarget(r.instanceIndex)}
+          >
+            {r.setup?.status === 'pending' ? '继续登录' : '登录'}
+          </Button>
           <Button size="small" onClick={() => openEdit(r)}>
             编辑
           </Button>
@@ -282,9 +302,13 @@ export default function AccountsView(): React.JSX.Element {
           columns={columns}
           dataSource={accounts}
           pagination={false}
+          scroll={{ x: 1140 }}
           locale={{ emptyText: '还没有账号。点右上角「新建账号」，然后把它绑到一个实例上。' }}
         />
       </GlassCard>
+      {loginTarget !== null && (
+        <AccountLoginDrawer instanceIndices={[loginTarget]} onClose={() => setLoginTarget(null)} />
+      )}
 
       <Modal
         open={open}
@@ -329,7 +353,7 @@ export default function AccountsView(): React.JSX.Element {
             <Input.TextArea rows={2} />
           </Form.Item>
           <Form.Item name="enabled" label="启用" valuePropName="checked">
-            <Switch />
+            <Switch disabled={editing?.setup?.status === 'pending'} />
           </Form.Item>
         </Form>
       </Modal>

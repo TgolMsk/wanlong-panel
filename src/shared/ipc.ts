@@ -14,6 +14,7 @@
  */
 
 import type {
+  BaseInstanceSelection,
   Account,
   AppInfo,
   AppSettings,
@@ -23,6 +24,7 @@ import type {
   MumuInstance,
   ResolvedPaths
 } from './domain'
+import type { LoginCommand, LoginInput, LoginRequest, LoginSession } from './login'
 import type {
   LogEntry,
   LogQuery,
@@ -67,6 +69,17 @@ export interface CaptureOptions {
   quality?: number
 }
 
+/** 模板专用无损截图；坐标仍以输出 PNG 尺寸为准。 */
+export interface PngCaptureShot {
+  width: number
+  height: number
+  png: ArrayBuffer
+  imageWidth: number
+  imageHeight: number
+  capturedAt: number
+  elapsedMs: number
+}
+
 /** 在真实设备画面上试跑一个模板，模板编辑器用它做「立即验证」。 */
 export interface TemplateTestRequest {
   setId: string
@@ -107,11 +120,14 @@ export const CH = {
   instanceClone: 'instance:clone',
   instanceDelete: 'instance:delete',
   instanceConfig: 'instance:config',
+  instanceBase: 'instance:base',
+  instanceSetBase: 'instance:setBase',
   // 设备
   deviceAttach: 'device:attach',
   deviceDetach: 'device:detach',
   deviceInfo: 'device:info',
   deviceCapture: 'device:capture',
+  deviceCapturePng: 'device:capturePng',
   deviceTap: 'device:tap',
   deviceSwipe: 'device:swipe',
   deviceText: 'device:text',
@@ -150,6 +166,12 @@ export const CH = {
   accountSave: 'account:save',
   accountDelete: 'account:delete',
   accountBind: 'account:bind',
+  loginBegin: 'login:begin',
+  loginCommand: 'login:command',
+  loginSession: 'login:session',
+  loginInput: 'login:input',
+  loginVerify: 'login:verify',
+  loginCancel: 'login:cancel',
   // 应用/系统
   appSettings: 'app:settings',
   appSaveSettings: 'app:saveSettings',
@@ -162,6 +184,12 @@ export const CH = {
 // ── 路由表：通道名 -> [参数元组, 返回值] ──────────────────────────────────
 
 export type IpcRoutes = {
+  'login:begin': [[request: LoginRequest], LoginSession]
+  'login:command': [[sessionId: string, command: LoginCommand], LoginSession]
+  'login:session': [[instanceIndex: number], LoginSession | null]
+  'login:input': [[sessionId: string, input: LoginInput], boolean]
+  'login:verify': [[sessionId: string, identityConfirmed: boolean], LoginSession]
+  'login:cancel': [[sessionId: string], void]
   // ── 实例生命周期（走 mumutool）──────────────────────────────────────────
   'instance:list': [[], MumuInstance[]]
   /** 强制立刻拉一次 mumutool info all，而不是等轮询。 */
@@ -175,6 +203,8 @@ export type IpcRoutes = {
   'instance:delete': [[index: number], void]
   /** 透传给 `mumutool config <i> -s '<json>'`。只有写入端可用，读取端在 Mac 版是坏的。 */
   'instance:config': [[index: number, settings: Record<string, unknown>], void]
+  'instance:base': [[], BaseInstanceSelection | null]
+  'instance:setBase': [[index: number | null], BaseInstanceSelection | null]
 
   // ── 设备（走 adb）──────────────────────────────────────────────────────
   /** 连接实例的 adb 端口并做四重就绪判定，成功返回设备信息。 */
@@ -182,6 +212,7 @@ export type IpcRoutes = {
   'device:detach': [[index: number], void]
   'device:info': [[index: number], DeviceInfo]
   'device:capture': [[index: number, opts?: CaptureOptions], CaptureShot]
+  'device:capturePng': [[index: number, width?: number], PngCaptureShot]
   'device:tap': [[input: ManualInput], void]
   'device:swipe': [[input: ManualInput], void]
   'device:text': [[input: ManualInput], void]
@@ -249,6 +280,9 @@ export type IpcResult<K extends IpcChannel> = IpcRoutes[K][1]
 // ── 主进程 -> 渲染进程的低频推送 ──────────────────────────────────────────
 
 export type IpcEvents = {
+  'login:changed': LoginSession
+  'account:changed': Account[]
+  'instance:baseChanged': BaseInstanceSelection | null
   /** 实例列表发生变化（轮询发现 / 用户操作后）。 */
   'instance:changed': MumuInstance[]
   /** 某次执行的状态变了。 */

@@ -7,58 +7,80 @@
  */
 
 import { CH } from '@shared/ipc'
-import { handle } from '@main/ipc'
+import { emit, handle } from '@main/ipc'
 import type { MainDeps } from './index'
 
 export function registerInstanceHandlers(deps: MainDeps): void {
+  const provisioner = deps.provisioner
+  handle(CH.instanceBase, () => provisioner.getBase())
+  handle(CH.instanceSetBase, async (index) => {
+    const base = await provisioner.setBase(index)
+    emit('instance:baseChanged', base)
+    return base
+  })
   handle(CH.instanceList, () => deps.mumu.list())
 
   handle(CH.instanceRefresh, () => deps.mumu.refresh())
 
-  handle(CH.instanceOpen, async (index) => {
-    await deps.mumu.open(index)
-    await refreshQuietly(deps)
-  })
+  handle(CH.instanceOpen, (index) =>
+    provisioner.withInstance(index, '启动实例', async () => {
+      await deps.mumu.open(index)
+      await refreshQuietly(deps)
+    })
+  )
 
-  handle(CH.instanceClose, async (index) => {
-    await deps.mumu.close(index)
-    // 实例都关了，adb 那边的 serial 与设备信息全部作废，必须清掉；
-    // 否则下次开机端口变了，缓存里的旧 serial 会让所有命令打空。
-    await dropDevice(deps, index)
-    await refreshQuietly(deps)
-  })
+  handle(CH.instanceClose, (index) =>
+    provisioner.withInstance(index, '关闭实例', async () => {
+      await deps.mumu.close(index)
+      // 实例都关了，adb 那边的 serial 与设备信息全部作废，必须清掉；
+      // 否则下次开机端口变了，缓存里的旧 serial 会让所有命令打空。
+      await dropDevice(deps, index)
+      await refreshQuietly(deps)
+    })
+  )
 
-  handle(CH.instanceRestart, async (index) => {
-    await deps.mumu.restart(index)
-    await dropDevice(deps, index)
-    await refreshQuietly(deps)
-  })
+  handle(CH.instanceRestart, (index) =>
+    provisioner.withInstance(index, '重启实例', async () => {
+      await deps.mumu.restart(index)
+      await dropDevice(deps, index)
+      await refreshQuietly(deps)
+    })
+  )
 
   handle(CH.instanceCreate, async (opts) => {
-    const created = await deps.mumu.create(opts)
-    await refreshQuietly(deps)
-    return created
+    try {
+      return await provisioner.create(opts)
+    } finally {
+      await refreshQuietly(deps)
+    }
   })
 
   handle(CH.instanceClone, async (index) => {
-    const created = await deps.mumu.clone(index)
-    await refreshQuietly(deps)
-    return created
+    try {
+      return await provisioner.clone(index)
+    } finally {
+      await refreshQuietly(deps)
+    }
   })
 
   handle(CH.instanceDelete, async (index) => {
-    await dropDevice(deps, index)
-    await deps.mumu.remove(index)
-    await refreshQuietly(deps)
+    try {
+      await provisioner.remove(index, () => dropDevice(deps, index))
+      emit('instance:baseChanged', await provisioner.getBase())
+    } finally {
+      await refreshQuietly(deps)
+    }
   })
 
-  handle(CH.instanceConfig, async (index, settings) => {
-    await deps.mumu.config(index, settings)
-    // 配置里很可能改了分辨率，而坐标换算依赖缓存的 screenWidth/Height，
-    // 这里必须断开，强制下次使用时重新采集设备信息。
-    await dropDevice(deps, index)
-    await refreshQuietly(deps)
-  })
+  handle(CH.instanceConfig, (index, settings) =>
+    provisioner.withInstance(index, '写入实例配置', async () => {
+      await deps.mumu.config(index, settings)
+      // 配置里很可能改了分辨率，而坐标换算依赖缓存的 screenWidth/Height，
+      // 这里必须断开，强制下次使用时重新采集设备信息。
+      await dropDevice(deps, index)
+      await refreshQuietly(deps)
+    })
+  )
 }
 
 // ── 内部 ─────────────────────────────────────────────────────────────────

@@ -74,11 +74,15 @@ export interface MumuWinInstanceRaw {
   launchErrMsg: string
   androidVersion: string | null
   diskSizeBytes: number | null
+  /** MuMu 创建时间戳，用于区分删除后复用同一编号的实例。 */
+  createdTimestamp?: string | null
 }
 
 /** 面板内部使用的实例视图（驼峰化 + 附加派生字段）。 */
 export interface MumuInstance {
   index: number
+  /** 驱动能提供时用于识别实例本身，不随改名变化。 */
+  identity?: string | null
   name: string
   state: MumuState
   /** null 表示实例未运行或 info 没给出端口。 */
@@ -111,9 +115,20 @@ export type AdbLinkState = 'disconnected' | 'connecting' | 'connected' | 'unauth
  *     （支持的键见 src/main/mumu/ldplayer/index.ts 的 LD_MODIFY_KEYS，例如 { resolution: "2560,1440,360", cpu: 4, memory: 4096 }）
  */
 export interface CreateInstanceOptions {
+  /** 未指定时：已设基础实例则克隆，否则空白新建。 */
+  source?: 'base' | 'blank'
+  /** 面板确认的基础实例编号，防止打开弹窗后源实例被改动。 */
+  expectedBaseIndex?: number
   count?: number
   type?: 'phone' | 'tablet'
   settings?: Record<string, unknown>
+}
+
+/** 按模拟器安装位置和数据目录分别保存。index 0 是合法基础实例。 */
+export interface BaseInstanceSelection {
+  index: number
+  name: string
+  identity: string | null
 }
 
 // ── adb 设备 ──────────────────────────────────────────────────────────────
@@ -163,6 +178,8 @@ export interface AdbResult {
 // ── 账号 ─────────────────────────────────────────────────────────────────
 
 export interface Account {
+  /** 登录向导写入；旧账号无此字段，保持原有行为。 */
+  setup?: import('./login').AccountSetup
   id: string
   /** 展示名，例如「主号-王朝A区」。 */
   name: string
@@ -184,6 +201,9 @@ export interface Account {
 // ── 面板设置 ──────────────────────────────────────────────────────────────
 
 export interface AppSettings {
+  /** 只读运行状态，不写入配置文件。 */
+  restartRequired?: boolean
+  runtimeEmulator?: EmulatorKind
   /**
    * 用哪个模拟器驱动。**默认 mumu**（Windows 落到 MuMuManager.exe，macOS 落到 mumutool）；雷电要显式选。
    * 设置文件里没有这个键时（Mac 时代的旧 settings.json）由 defaultSettings 按平台补。

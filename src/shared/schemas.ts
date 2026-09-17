@@ -280,6 +280,13 @@ export const scriptDefSchema = z.object({
 // ── 账号 ──────────────────────────────────────────────────────────────────
 
 export const accountSchema = z.object({
+  setup: z
+    .object({
+      status: z.enum(['pending', 'ready']),
+      instanceIdentity: z.string().nullable(),
+      verifiedAt: z.number().nullable()
+    })
+    .optional(),
   id: z.string().min(1),
   name: z.string().min(1),
   packageName: z.string().optional(),

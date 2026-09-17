@@ -97,7 +97,19 @@ export function PauseBanner({
         <span className="wl-micro">自动调度已关闭，不会再排唤醒</span>
       </div>
 
-      <div className="wla-banner-reason">{pause.reason ?? '没有记录原因。'}</div>
+      <details className="wla-banner-diagnostics">
+        <summary>查看暂停原因与诊断详情</summary>
+        <div className="wla-banner-reason">{pause.reason ?? '没有记录原因。'}</div>
+        {detailEntries.length > 0 && (
+          <div className="wla-detail">
+            {detailEntries.map(([k, v]) => (
+              <span className="wla-detail-chip" key={k}>
+                {k}={String(v)}
+              </span>
+            ))}
+          </div>
+        )}
+      </details>
 
       {pause.advice && <div className="wla-banner-advice">处置：{pause.advice}</div>}
 
@@ -106,16 +118,6 @@ export function PauseBanner({
         {pause.notified === true && <span>已推送到 Telegram</span>}
         {pause.notified === null && <span>未配置推送</span>}
       </div>
-
-      {detailEntries.length > 0 && (
-        <div className="wla-detail">
-          {detailEntries.map(([k, v]) => (
-            <span className="wla-detail-chip" key={k}>
-              {k}={String(v)}
-            </span>
-          ))}
-        </div>
-      )}
 
       {pause.notifyError && (
         <div className="wla-banner-notify-err">

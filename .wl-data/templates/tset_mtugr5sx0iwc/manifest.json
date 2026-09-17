@@ -3332,7 +3332,34 @@
       "note": "AI 自学（scheduler-sample，置信 0.95，模型 qwen3.8-flash）：预先下载活动弹窗，右上角有清晰的×关闭按钮",
       "createdAt": 1789367230596,
       "updatedAt": 1789367230596
+    },
+    {
+      "id": "tpl_btn_close_popup_ai2",
+      "name": "弹窗关闭·AI 自学 #2",
+      "file": "tpl_btn_close_popup_ai2.png",
+      "authoredWidth": 2560,
+      "authoredHeight": 1440,
+      "bounds": {
+        "x": 1915,
+        "y": 365,
+        "w": 66,
+        "h": 69
+      },
+      "defaultRoi": {
+        "x": 1758,
+        "y": 208,
+        "w": 380,
+        "h": 383
+      },
+      "std": 30.6,
+      "tags": [
+        "ai-harvest",
+        "popup-close"
+      ],
+      "note": "AI 自学（scheduler-sample，置信 0.95，模型 qwen3.8-flash）：活动弹窗，右上角有明确的关闭按钮",
+      "createdAt": 1789493436256,
+      "updatedAt": 1789493436256
     }
   ],
-  "updatedAt": 1789367230596
+  "updatedAt": 1789493436256
 }

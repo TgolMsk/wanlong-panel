@@ -1,24 +1,28 @@
 /**
  * 面板设置的加载与保存。
  *
- * 单一实例：整个主进程只有一份 AppSettings，靠 getSettings() 同步取。
+ * 已保存设置供表单显示；运行设置固定本次启动的设备身份和数据目录，普通选项即时生效。
  * 磁盘上损坏或缺字段的设置**不会让应用起不来**——缺什么补什么，整体不合法就整体回退到默认值，
  * 同时把问题写进日志并给面板推一条提示。
  */
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { basename, dirname } from 'node:path'
+import { basename, dirname, isAbsolute } from 'node:path'
 import { LD_CLI_EXE, MUMU_WIN_CLI_EXE } from '@shared/constants'
 import { defaultSettings } from '@shared/defaults'
 import { appSettingsSchema } from '@shared/schemas'
 import { AppError } from '@shared/errors'
 import type { AppSettings } from '@shared/domain'
-import { defaultDataDir, settingsFilePath } from '@main/paths'
+import { defaultDataDir, settingsFilePath, ensureDirs, resolvePaths } from '@main/paths'
+import { selectDataContext } from './dataContext'
 import { emit } from '@main/ipc'
 import { detectLdInstall } from '@main/mumu/ldplayer/detect'
 import { detectMumuWinInstall } from '@main/mumu/mumuwin/detect'
+import { settingsForRuntime, settingsNeedRestart } from './runtimeSettings'
 
 let current: AppSettings | null = null
+let runtime: AppSettings | null = null
+let saveChain: Promise<unknown> = Promise.resolve()
 
 type Listener = (settings: AppSettings) => void
 const listeners = new Set<Listener>()
@@ -28,7 +32,16 @@ export function getSettings(): AppSettings {
   if (!current) {
     throw new AppError('UNKNOWN', '设置尚未加载，loadSettings() 必须在任何 handler 注册之前调用')
   }
-  return current
+  return {
+    ...current,
+    restartRequired: runtime ? settingsNeedRestart(current, runtime) : false,
+    runtimeEmulator: runtime?.emulator ?? current.emulator
+  }
+}
+
+export function getRuntimeSettings(): AppSettings {
+  if (!runtime) throw new AppError('UNKNOWN', '运行设置尚未加载。')
+  return { ...runtime }
 }
 
 /** 是否已经加载过（健康检查等旁路逻辑用，避免抛错）。 */
@@ -73,6 +86,7 @@ export async function loadSettings(): Promise<AppSettings> {
 
   // 只在「文件不存在 / 被补过字段 / 被修正过」时才写回，避免每次启动都白改一次 mtime。
   if (serialize(current) !== onDisk) await persist(current)
+  runtime = { ...current }
   return current
 }
 
@@ -119,6 +133,19 @@ function needsDetect(p: string, expectExe: string): boolean {
  * 保存成功后通知所有订阅者（模块 a/b 靠它更新可执行文件路径），并推给渲染进程。
  */
 export async function saveSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
+  const snapshot = { ...patch }
+  const next = saveChain.then(
+    () => saveSettingsSerial(snapshot),
+    () => saveSettingsSerial(snapshot)
+  )
+  saveChain = next.then(
+    () => undefined,
+    () => undefined
+  )
+  return next
+}
+
+async function saveSettingsSerial(patch: Partial<AppSettings>): Promise<AppSettings> {
   const base = getSettings()
   const next = appSettingsSchema.safeParse({ ...base, ...patch })
   if (!next.success) {
@@ -127,18 +154,25 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<AppSett
     })
   }
   // 换了模拟器种类 / 把路径清空 -> 顺手按注册表补上路径，用户不必手动找 exe。
-  current = await autofillEmulatorPaths(next.data)
-  await persist(current)
+  const saved = await autofillEmulatorPaths(next.data)
+  if (!isAbsolute(saved.dataDir))
+    throw new AppError('INVALID_ARGUMENT', '数据目录请填写完整的绝对路径。')
+  const nextContext = await selectDataContext(saved)
+  await ensureDirs(resolvePaths(saved, nextContext))
+  await persist(saved)
+  current = saved
+  runtime = settingsForRuntime(saved, runtime ?? saved)
 
   for (const cb of listeners) {
     try {
-      cb(current)
+      cb(getRuntimeSettings())
     } catch (e) {
       console.error('[config] 设置变更回调抛错', e)
     }
   }
-  emit('app:settingsChanged', current)
-  return current
+  const result = getSettings()
+  emit('app:settingsChanged', result)
+  return result
 }
 
 /** 订阅设置变化。返回退订函数。 */
@@ -152,6 +186,7 @@ export function onSettingsChanged(cb: Listener): () => void {
 /** 测试/热重载用：清空内存态。 */
 export function resetSettings(): void {
   current = null
+  runtime = null
   listeners.clear()
 }
 

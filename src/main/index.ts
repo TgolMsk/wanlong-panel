@@ -21,8 +21,15 @@ import type { AppSettings, ResolvedPaths } from '@shared/domain'
 import type { LogLevel, RunSnapshot, RunStatus } from '@shared/script'
 
 import { emit, resetIpc } from '@main/ipc'
-import { getSettings, loadSettings, onSettingsChanged, saveSettings } from '@main/config'
-import { ensureDirs, resolvePaths } from '@main/paths'
+import {
+  getRuntimeSettings as getSettings,
+  getSettings as getSavedSettings,
+  loadSettings,
+  onSettingsChanged,
+  saveSettings
+} from '@main/config'
+import { selectDataContext } from '@main/dataContext'
+import { ensureDirs, resolvePaths, resourcesDir } from '@main/paths'
 import { runHealthCheck } from '@main/health'
 import { registerAllHandlers } from '@main/handlers/index'
 import { ensureDevice, rawFrameToShot, toArrayBuffer, toDevicePoint } from '@main/handlers/device'
@@ -79,7 +86,20 @@ import {
 } from '@vision/index'
 
 // ── 模块 d：磁盘存储 ──────────────────────────────────────────────────────
-import { bindAccount, deleteAccount, listAccounts, saveAccount } from '@main/store/accounts'
+import {
+  bindAccount,
+  completeLoginAccount,
+  deleteAccount,
+  listAccounts,
+  prepareLoginAccount,
+  saveAccount
+} from '@main/store/accounts'
+import { InstanceProvisioner } from '@main/instanceProvisioner'
+import { AccountLoginCoordinator } from '@main/login/coordinator'
+import { verifyGameHome } from '@main/login/verify'
+import { executePhoneCommand } from '@main/login/phoneDriver'
+import { inputLoginDigits } from '@main/login/nativeUi'
+import { applyBindings } from '@main/handlers/account'
 import {
   deleteScript,
   getScript,
@@ -282,7 +302,10 @@ function runDeps(): RunDeps {
     settings: getSettings(),
     paths: paths(),
     // 连接由主进程负责：worker 里不做 attach，进去时 serial 必须已经可用。
-    resolveSerial: async (instanceIndex) => (await ensureDevice(deps, instanceIndex)).serial,
+    resolveSerial: async (instanceIndex) => {
+      await assertInstanceAutomationReady(instanceIndex)
+      return (await ensureDevice(deps, instanceIndex)).serial
+    },
     loadAccount: async (accountId) =>
       (await accounts.list()).find((a) => a.id === accountId) ?? null
   }
@@ -315,7 +338,11 @@ function schedulerDeps(): SchedulerDeps {
       const s = getSettings()
       return { refWidth: s.refWidth, refHeight: s.refHeight }
     },
-    resolveDevice: (index) => ensureDevice(deps, index),
+    ensureAutomationReady: assertInstanceAutomationReady,
+    resolveDevice: async (index) => {
+      await assertInstanceAutomationReady(index)
+      return ensureDevice(deps, index)
+    },
     busyRunIdOf: (index) => orchImpl.runIdOfInstance(index),
     accountIdOf: async (index) =>
       (await accounts.list()).find((a) => a.instanceIndex === index)?.id ?? null,
@@ -372,9 +399,9 @@ function schedulerDeps(): SchedulerDeps {
     //   而且被归类成「掉线」而不是「疑似顶号」。
     //   返回是否命中：命中了采样器就不再盲按 BACK 关弹窗（顶号弹窗按 BACK 没意义）。
     // 先跑顶号 / 掉线探针（命中 ⇒ true，告警中心接管）；没命中再问 AI 顾问（点掉弹窗 ⇒ 'recovered'）。
-    onUnrecognizedFrame: async (index, raw) => {
+    onUnrecognizedFrame: async (index, raw, signal) => {
       if (await probeFrameForAlerts(index, raw, '采样时')) return true
-      return aiRecoverForScheduler(index, raw)
+      return aiRecoverForScheduler(index, raw, signal)
     },
 
     // ★ 健康探针：只截一帧不开面板。给「顶号 / 游戏退出」的发现延迟设上限（默认 3 分钟）。
@@ -468,7 +495,11 @@ const gatherAdvisor: UnknownScreenAdvisor = {
  * 调度器采样时的 AI 恢复：采样器认不出界面、顶号探针也没命中时调用。
  * 返回 'recovered' 让采样器重新截图（不按 BACK）；false 让它按原阶梯继续。绝不抛。
  */
-async function aiRecoverForScheduler(index: number, raw: RawFrame): Promise<false | 'recovered'> {
+async function aiRecoverForScheduler(
+  index: number,
+  raw: RawFrame,
+  signal?: AbortSignal
+): Promise<false | 'recovered'> {
   if (!aiAdvisor.isActive()) return false
   try {
     const dev = await ensureDevice(deps, index)
@@ -476,12 +507,19 @@ async function aiRecoverForScheduler(index: number, raw: RawFrame): Promise<fals
       alertLog(l, `[实例${index}] ${m}`, d)
     )
     const io: RecoverIo = {
-      capture: () => captureRaw(dev.serial),
+      capture: () => {
+        signal?.throwIfAborted()
+        return captureRaw(dev.serial)
+      },
       tap: async (x, y) => {
+        signal?.throwIfAborted()
         const p = toDevicePoint(dev, { x, y })
         await tap(dev.serial, p.x, p.y)
       },
-      key: (k) => adbKey(dev.serial, k)
+      key: (k) => {
+        signal?.throwIfAborted()
+        return adbKey(dev.serial, k)
+      }
     }
     const r = await aiRecoverUnknownScreen(aiAdvisor, {
       instanceIndex: index,
@@ -838,11 +876,76 @@ function gatherRunnerDeps(): GatherRunnerDeps {
 
 // ── 汇总 ─────────────────────────────────────────────────────────────────
 
+let activeContextDir: string | undefined
 function paths(): ResolvedPaths {
-  return resolvePaths(getSettings())
+  return resolvePaths(getSettings(), activeContextDir)
 }
 
+const provisioner = new InstanceProvisioner(mumu, () => paths().dataDir)
+
+async function assertInstanceAutomationReady(index: number): Promise<void> {
+  const [base, list] = await Promise.all([provisioner.getBase(), accounts.list()])
+  if (base?.index === index)
+    throw new AppError('INVALID_ARGUMENT', '基础实例用于克隆，请在副本中配置自动任务。')
+  const account = list.find((a) => a.instanceIndex === index)
+  if (!account?.setup) return // 旧账号沿用原有流程。
+  const instance = mumu.get(index)
+  if (
+    account.setup.status !== 'ready' ||
+    (account.setup.instanceIdentity &&
+      account.setup.instanceIdentity !== (instance?.identity ?? instance?.bundlePath ?? null))
+  ) {
+    throw new AppError(
+      'DEVICE_NOT_READY',
+      '此账号尚未完成登录检查，或绑定实例已改变。请在账号登录向导中继续。'
+    )
+  }
+}
+
+const login = new AccountLoginCoordinator({
+  command: executePhoneCommand,
+  base: () => provisioner.getBase(),
+  instances: () => mumu.refresh(),
+  open: (index) => mumu.open(index),
+  device: (index) => ensureDevice(deps, index),
+  maxInstances: () => getSettings().maxConcurrentInstances,
+  pauseAuto: (index) => scheduler.setAuto(index, false),
+  prepare: (input, identity) =>
+    prepareLoginAccount(paths().accountsDir, {
+      ...input,
+      name: input.newAccountName,
+      identity,
+      packageName: GAME_PACKAGE
+    }),
+  complete: (id, index, identity) => completeLoginAccount(paths().accountsDir, id, index, identity),
+  launch: async (serial) => {
+    await launchViaMonkey(serial, GAME_PACKAGE)
+  },
+  input: async (device, input) => {
+    if (input.kind === 'text') return inputLoginDigits(device.serial, input.text)
+    if (input.kind === 'key') return adbKey(device.serial, input.key)
+    const at = toDevicePoint(device, input.at)
+    if (input.kind === 'tap') return tap(device.serial, at.x, at.y)
+    const to = toDevicePoint(device, input.to)
+    return swipe(device.serial, at.x, at.y, to.x, to.y, input.durationMs)
+  },
+  verify: (serial) =>
+    verifyGameHome(serial, paths().templatesDir, getSettings().refWidth, getSettings().refHeight),
+  changed: (session) => emit('login:changed', session),
+  accountsChanged: () => {
+    void accounts
+      .list()
+      .then((list) => {
+        applyBindings(deps, list)
+        emit('account:changed', list)
+      })
+      .catch(() => console.warn('[login] 刷新账号列表失败。'))
+  }
+})
+
 const deps: MainDeps = {
+  provisioner,
+  login,
   mumu,
   adb,
   vision,
@@ -850,7 +953,7 @@ const deps: MainDeps = {
   accounts,
   logs,
   orchestrator,
-  settings: getSettings,
+  settings: getSavedSettings,
   paths,
   saveSettings
 }
@@ -900,6 +1003,11 @@ function createWindow(): BrowserWindow {
     minHeight: 700,
     show: false,
     title: '万龙控制面板',
+    icon: join(
+      resourcesDir(),
+      'brand',
+      process.platform === 'win32' ? 'app-icon.ico' : 'app-icon.png'
+    ),
     autoHideMenuBar: true,
     webPreferences: {
       // ★ 路径必须是 .cjs：sandbox 下 Electron 只能加载 CommonJS preload
@@ -952,13 +1060,14 @@ async function refreshHealth(): Promise<void> {
 
 async function bootstrap(): Promise<void> {
   const settings = await loadSettings()
-  const resolved = resolvePaths(settings)
+  activeContextDir = await selectDataContext(settings)
+  const resolved = resolvePaths(settings, activeContextDir)
   await ensureDirs(resolved)
 
   applyConfigToModules(settings, resolved)
   unsubscribers.push(
     onSettingsChanged((s) => {
-      const p = resolvePaths(s)
+      const p = resolvePaths(s, activeContextDir)
       applyConfigToModules(s, p)
       // 轮询间隔也可能被改了；start 在已运行时只换间隔，不会起第二条定时器链。
       safely('调整实例轮询间隔', () => registry.start(s.instancePollIntervalMs))
@@ -1089,6 +1198,7 @@ async function bootstrap(): Promise<void> {
 
 /** 退出前收尾：停轮询、退订、关掉所有 utilityProcess 和 adb 连接，别留孤儿进程。 */
 async function shutdown(): Promise<void> {
+  await login.shutdown()
   safely('停止实例轮询', () => registry.stop())
   // 调度器的定时器虽然都 unref 过（不会钉住进程），但状态要趁还活着落盘。
   try {

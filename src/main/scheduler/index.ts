@@ -12,8 +12,7 @@
  *
  * ★ 与执行器（orchestrator）的边界：
  *   主进程和每个 utilityProcess 各持一份 adb 队列单例，**跨进程不共享**。
- *   所以某个实例上有脚本在跑时，调度器**绝不去动它** —— 两边同时驱动同一个模拟器
- *   会互相插入点击，后果不可预测。这一条由 deps.busyRunIdOf 把关。
+ *   脚本和调度共用主进程 instanceAccess 占用表；busyRunIdOf 另提供具体任务提示。
  *
  * ★ 关于「主进程不做视觉」这条纪律：
  *   本模块确实在主进程里跑匹配，这是有意的例外，代价也算过：
@@ -40,6 +39,7 @@ import { SCHED_CH, defaultSchedulerConfig } from '@shared/scheduler'
 import type { RawFrame } from '@shared/vision'
 
 import { ensureGameForeground, type GamePresence } from '@main/game/launch'
+import { instanceAccess } from '@main/instanceAccess'
 import { emitScheduler, handleScheduler, resetSchedulerIpc } from './ipc'
 import {
   applySample,
@@ -81,9 +81,11 @@ export interface SchedulerDeps {
   refSize(): { refWidth: number; refHeight: number }
   /** 实例 index -> 已连接的设备信息（内部负责必要时 attach）。 */
   resolveDevice(instanceIndex: number): Promise<DeviceInfo>
+  /** 新实例完成账号登录检查后，才能启用自动调度。 */
+  ensureAutomationReady?(instanceIndex: number): Promise<void>
   /**
    * 该实例上是否有脚本在跑；有就返回 runId。
-   * ★ 这是调度器与执行器之间唯一的互斥手段，必须接上，不能给个恒返回 null 的桩。
+   * 与共享占用表配合，提供当前脚本的具体任务提示。
    */
   busyRunIdOf(instanceIndex: number): string | null
   /** 实例绑定的账号 id（用于面板显示）。 */
@@ -105,7 +107,11 @@ export interface SchedulerDeps {
    * 返回 true = 探针命中并已接管（告警中心暂停实例），采样器就不再按 BACK 试探。
    * 在实例锁内被调用：实现方只能做识别 + 抛告警，**不得** await 调度器自己的方法。
    */
-  onUnrecognizedFrame?(instanceIndex: number, raw: RawFrame): Promise<boolean | 'recovered' | void>
+  onUnrecognizedFrame?(
+    instanceIndex: number,
+    raw: RawFrame,
+    signal?: AbortSignal
+  ): Promise<boolean | 'recovered' | void>
   /**
    * 健康探针：到点截一帧（不开面板）交给上层，附带前台包名与游戏进程存活情况。
    * 同样在实例锁内，同样不得 await 调度器方法。
@@ -144,12 +150,24 @@ export interface SchedulerDeps {
  * 队列出现空位时的回调 —— 采集派遣流程在这里接管。
  * 调度器只负责「什么时候去看」和「看到了什么」，**不决定派哪一队去哪里**。
  */
-export type QueueFreeHook = (state: InstanceQueueState) => Promise<void>
+export type QueueFreeHook = (state: InstanceQueueState, signal?: AbortSignal) => Promise<void>
 
 // ── 实例运行时 ────────────────────────────────────────────────────────────
 
 /** 记录「当前异步上下文正持有哪个实例的锁」，用于重入判定。 */
 const lockCtx = new AsyncLocalStorage<number>()
+const autoCtx = new AsyncLocalStorage<AbortSignal>()
+
+function checkAuto(): void {
+  if (autoCtx.getStore()?.aborted) throw new AppError('RUN_ABORTED', '自动调度已停止。')
+}
+
+async function autoOperation<T>(fn: () => Promise<T>): Promise<T> {
+  checkAuto()
+  const result = await fn()
+  checkAuto()
+  return result
+}
 
 interface Runtime {
   state: InstanceQueueState
@@ -158,6 +176,8 @@ interface Runtime {
   lock: Promise<unknown>
   /** 上次健康探针时刻（内存态）。 */
   lastHealthProbeAt?: number
+  autoController?: AbortController
+  autoRequest?: number
 }
 
 class SchedulerImpl {
@@ -166,6 +186,7 @@ class SchedulerImpl {
   private readonly runtimes = new Map<number, Runtime>()
   private queueFreeHook: QueueFreeHook | null = null
   private started = false
+  private stopping = false
 
   // ── 生命周期 ───────────────────────────────────────────────────────────
 
@@ -173,6 +194,8 @@ class SchedulerImpl {
     if (this.started) return
     this.deps = deps
     this.started = true
+    this.stopping = false
+    this.runtimes.clear()
 
     // ★ 先把 IPC 通道注册上：万一状态文件读坏了，面板至少能拉到空状态并看到错误，
     //   而不是收到一句「No handler registered」不知所云。
@@ -222,8 +245,11 @@ class SchedulerImpl {
 
   /** 退出前收尾：停掉全部定时器并把状态落盘。 */
   async stop(): Promise<void> {
+    this.stopping = true
+    for (const rt of this.runtimes.values()) rt.autoController?.abort()
     cancelAllWakes()
     if (!this.started) return
+    await Promise.allSettled([...this.runtimes.values()].map((rt) => rt.lock))
     try {
       await this.persist()
     } catch (e) {
@@ -280,7 +306,16 @@ class SchedulerImpl {
   /** 开/关某实例的自动调度。 */
   async setAuto(instanceIndex: number, enabled: boolean): Promise<InstanceQueueState> {
     const rt = this.rt(instanceIndex)
+    const request = (rt.autoRequest = (rt.autoRequest ?? 0) + 1)
+    if (enabled && this.deps?.ensureAutomationReady) {
+      await this.deps.ensureAutomationReady(instanceIndex)
+      // 校验期间的关闭请求优先，避免晚到的启用重新打开自动任务。
+      if (rt.autoRequest !== request || this.stopping) return cloneState(rt.state)
+    }
     const flipped = rt.state.auto !== enabled
+    if (!enabled) rt.autoController?.abort()
+    else if (flipped || !rt.autoController) rt.autoController = new AbortController()
+    const autoSignal = rt.autoController?.signal
     rt.state.auto = enabled
     if (flipped) this.notifyAutoChanged(instanceIndex, enabled)
     if (!enabled) {
@@ -297,9 +332,10 @@ class SchedulerImpl {
     await this.persist()
     // 刚打开就先读一次，否则得等到下一个校准点才知道现在是什么情况。
     try {
-      await this.sample(instanceIndex, '开启自动调度后的首次采样')
+      await autoCtx.run(autoSignal!, () => this.sample(instanceIndex, '开启自动调度后的首次采样'))
     } catch (e) {
       const err = AppError.from(e)
+      if (err.code === 'RUN_ABORTED') return cloneState(rt.state)
       this.log('warn', `实例 ${instanceIndex} 首次采样失败：${err.message}`)
       // ★ 这里必须补一次排期，否则会留下「auto=true 但一个 timer 都没有」的僵尸态：
       //   sampleLocked 的失败分支只 publish+persist 就 throw，不 rearm。
@@ -317,10 +353,10 @@ class SchedulerImpl {
    * 反过来，调度器正在采样/派遣时 fn 会排队等它结束。
    *
    * ★ 实例上有脚本（utilityProcess）在跑时直接拒绝 —— 跨进程没有共享的 adb 队列，
-   *   busyRunIdOf 是与执行器之间唯一的互斥手段（与 sampleLocked 的第一道检查同一条规矩）。
+   *   取得实例锁时还会检查共享占用表，防止排队期间启动了脚本。
    * ★ fn 内部若要调 noteDispatch / sampleNow 会走重入放行；但**绝不能**在 fn 里调 setAuto(true)
    *   （它会 await sample，而 sample 在同一异步上下文里直接执行，等于在锁内又开一次面板）。
-   * ★ 不发 publish、不改 sampling 标志：对面板来说这段时间实例只是「被占着」。
+   * ★ 不改 sampling 标志；统一实例锁会发布 operating 状态，供面板显示设备操作仍在收尾。
    *
    * @param what 中文动作名，只用来拼拒绝时的提示，如「截图」「读资源统计」。
    */
@@ -380,6 +416,8 @@ class SchedulerImpl {
       resourceType: info.resourceType ?? null
     })
     rt.travelHints = rt.travelHints.slice(0, 8)
+    await this.persist()
+    if (autoCtx.getStore()?.aborted) return
     this.log(
       'info',
       `实例 ${instanceIndex} 记下一次派兵：单程 ${Math.round(travelTimeMs / 1000)}s` +
@@ -397,6 +435,12 @@ class SchedulerImpl {
 
   /** 忘掉某实例的全部记账（面板「重置」用）。 */
   async forget(instanceIndex: number): Promise<void> {
+    const rt = this.runtimes.get(instanceIndex)
+    if (rt) {
+      rt.state.auto = false
+      rt.autoController?.abort()
+      await rt.lock
+    }
     cancelWake(instanceIndex)
     this.runtimes.delete(instanceIndex)
     await this.persist()
@@ -414,7 +458,19 @@ class SchedulerImpl {
   private withLock<T>(instanceIndex: number, fn: () => Promise<T>): Promise<T> {
     if (lockCtx.getStore() === instanceIndex) return fn()
     const rt = this.rt(instanceIndex)
-    const run = (): Promise<T> => lockCtx.run(instanceIndex, fn)
+    const run = async (): Promise<T> => {
+      checkAuto()
+      const release = instanceAccess.acquire(instanceIndex, '读取或操作设备')
+      rt.state.operating = true
+      this.publish(rt.state)
+      try {
+        return await lockCtx.run(instanceIndex, fn)
+      } finally {
+        release()
+        rt.state.operating = false
+        this.publish(rt.state)
+      }
+    }
     const next = rt.lock.then(run, run)
     rt.lock = next.then(
       () => undefined,
@@ -435,8 +491,8 @@ class SchedulerImpl {
     }
     try {
       await this.withLock(instanceIndex, async () => {
-        const dev = await deps.resolveDevice(instanceIndex)
-        const raw = await deps.adb.capture(dev.serial)
+        const dev = await autoOperation(() => deps.resolveDevice(instanceIndex))
+        const raw = await autoOperation(() => deps.adb.capture(dev.serial))
         const pkg = deps.gamePackage?.()
         let foreground: string | null = null
         let running: boolean | null = null
@@ -454,6 +510,7 @@ class SchedulerImpl {
           'debug',
           `实例 ${instanceIndex} 健康探针：前台=${foreground ?? '未知'} 游戏进程=${running === null ? '未知' : running ? '在' : '不在'}`
         )
+        checkAuto()
         await deps.onHealthProbe!(instanceIndex, raw, { foreground, running })
       })
     } catch (e) {
@@ -466,6 +523,7 @@ class SchedulerImpl {
   }
 
   private async sampleLocked(instanceIndex: number, reason: string, force: boolean): Promise<void> {
+    checkAuto()
     const deps = this.requireDeps()
     const rt = this.rt(instanceIndex)
 
@@ -495,7 +553,7 @@ class SchedulerImpl {
     this.publish(rt.state)
 
     try {
-      const dev = await deps.resolveDevice(instanceIndex)
+      const dev = await autoOperation(() => deps.resolveDevice(instanceIndex))
       const { refWidth, refHeight } = deps.refSize()
       const templates = await getTemplates({
         templateSetId: this.config.templateSetId,
@@ -504,15 +562,16 @@ class SchedulerImpl {
 
       const io: SampleIo = {
         serial: dev.serial,
-        capture: () => deps.adb.capture(dev.serial),
+        capture: () => autoOperation(() => deps.adb.capture(dev.serial)),
         tapRef: async (x, y) => {
           const p = toDevice(dev, x, y)
-          await deps.adb.tap(dev.serial, p.x, p.y)
+          await autoOperation(() => deps.adb.tap(dev.serial, p.x, p.y))
         },
-        key: (k) => deps.adb.key(dev.serial, k),
+        key: (k) => autoOperation(() => deps.adb.key(dev.serial, k)),
         log: (level, message) => this.log(level, `[实例 ${instanceIndex}] ${message}`),
         onUnrecognized: deps.onUnrecognizedFrame
-          ? (raw) => deps.onUnrecognizedFrame!(instanceIndex, raw)
+          ? (raw) =>
+              autoOperation(() => deps.onUnrecognizedFrame!(instanceIndex, raw, autoCtx.getStore()))
           : undefined,
         // 冷启动恢复：模拟器刚开机 / 游戏被杀时，采样器靠它把游戏拉起来再继续。
         // 三样能力（前台包名 / 拉起 / 游戏包名）缺一就不接，采样器会退回原来的兜底阶梯。
@@ -528,10 +587,12 @@ class SchedulerImpl {
         closePanelAfterSample: this.config.closePanelAfterSample,
         deadlineAt: Date.now() + this.config.sampleTimeoutMs
       })
+      checkAuto()
 
       if (deps.accountIdOf) {
         rt.state.accountId = await deps.accountIdOf(instanceIndex).catch(() => null)
       }
+      checkAuto()
       const prev = rt.state
       rt.state = applySample(prev, sample, rt.travelHints, this.config)
       this.notifyMarchGone(instanceIndex, prev, sample)
@@ -543,6 +604,12 @@ class SchedulerImpl {
       )
     } catch (e) {
       const err = AppError.from(e)
+      if (autoCtx.getStore()?.aborted || err.code === 'RUN_ABORTED') {
+        rt.state.sampling = false
+        this.publish(rt.state)
+        await this.persist()
+        throw new AppError('RUN_ABORTED', '自动调度已停止。')
+      }
       rt.state = { ...rt.state, sampling: false, lastSampleOk: false, error: err.message }
       this.publish(rt.state)
       await this.persist()
@@ -579,9 +646,9 @@ class SchedulerImpl {
     return () =>
       ensureGameForeground(
         {
-          foreground: () => foregroundPackage(serial),
-          launch: () => launchApp(serial, pkg),
-          isRunning: isRunning ? () => isRunning(serial, pkg) : undefined,
+          foreground: () => autoOperation(() => foregroundPackage(serial)),
+          launch: () => autoOperation(() => launchApp(serial, pkg)),
+          isRunning: isRunning ? () => autoOperation(() => isRunning(serial, pkg)) : undefined,
           log: (level, message) => this.log(level, `[实例 ${instanceIndex}] ${message}`)
         },
         { packageName: pkg }
@@ -591,7 +658,7 @@ class SchedulerImpl {
   /** 按当前状态重排唤醒。backoffStep 传了就走退避，不传则按 ETA 正常排。 */
   private rearm(instanceIndex: number, why: string, backoffStep?: number): void {
     const rt = this.runtimes.get(instanceIndex)
-    if (!rt) return
+    if (!rt || this.stopping) return
     if (!rt.state.auto) {
       cancelWake(instanceIndex)
       rt.state.nextWakeAt = null
@@ -646,7 +713,24 @@ class SchedulerImpl {
    */
   private async onWake(instanceIndex: number, reason: string, prevStep: number): Promise<void> {
     const rt = this.runtimes.get(instanceIndex)
-    if (!rt || !rt.state.auto) return
+    if (!rt || !rt.state.auto || this.stopping) return
+    const controller = (rt.autoController ??= new AbortController())
+    try {
+      await autoCtx.run(controller.signal, () =>
+        this.wakeActive(instanceIndex, reason, prevStep, rt)
+      )
+    } catch (e) {
+      if (!controller.signal.aborted) this.log('warn', AppError.from(e).message)
+    }
+  }
+
+  private async wakeActive(
+    instanceIndex: number,
+    reason: string,
+    prevStep: number,
+    rt: Runtime
+  ): Promise<void> {
+    checkAuto()
 
     // ★ 健康探针分流：只截一帧不开面板，不计入采样成败、不动退避阶梯。
     if (reason === HEALTH_PROBE_REASON) {
@@ -662,11 +746,14 @@ class SchedulerImpl {
       await this.sample(instanceIndex, `到点唤醒 · ${reason}`, true)
     } catch (e) {
       const err = AppError.from(e)
+      checkAuto()
       this.log('warn', `实例 ${instanceIndex} 唤醒采样失败：${err.message}`)
       this.rearm(instanceIndex, err.message, prevStep + 1)
       return
     }
 
+    checkAuto()
+    if (!rt.state.auto) return
     const free = hasFreeSlot(rt.state)
     if (free !== true) {
       // 队列仍未空（或压根没读出 N/M）—— 指数退避，别原地打转。
@@ -695,10 +782,13 @@ class SchedulerImpl {
 
     try {
       await this.withLock(instanceIndex, async () => {
-        await this.queueFreeHook?.(cloneState(rt.state))
+        checkAuto()
+        if (!rt.state.auto) return
+        await this.queueFreeHook?.(cloneState(rt.state), autoCtx.getStore())
       })
     } catch (e) {
       const err = AppError.from(e)
+      checkAuto()
       this.log('warn', `实例 ${instanceIndex} 的派遣流程报错：${err.message}`)
       this.rearm(instanceIndex, `派遣失败：${err.message}`, prevStep + 1)
       return
@@ -707,6 +797,7 @@ class SchedulerImpl {
     // ★ 派遣流程正常派出去的话，它会调 noteDispatch，那条路会重新采样并按新 ETA 排期。
     //   要是跑完队列**还是**空的（没找到合适的资源点、兵力不够…），说明这一轮没派成，
     //   必须走退避，否则 planNextWake 会把唤醒压到最小间隔上，变成每几秒开一次面板的死循环。
+    checkAuto()
     if (hasFreeSlot(rt.state) === true) {
       this.rearm(instanceIndex, '派遣流程跑完了但队列仍有空位，稍后再试', prevStep + 1)
       return

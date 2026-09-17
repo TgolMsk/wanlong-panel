@@ -23,7 +23,7 @@ import {
 } from '@main/adb/index'
 import { isRunning, launchViaMonkey } from '@main/adb/apps'
 import { ensureGameForeground, type GamePresence } from '../launch'
-import type { GatherIo } from './session'
+import { GatherHalt, type GatherIo } from './session'
 
 export interface AdbGatherIoOptions {
   serial: string
@@ -33,6 +33,7 @@ export interface AdbGatherIoOptions {
   /** 已知的设备分辨率。不传则从 adb 缓存 / 第一帧截图里学。 */
   deviceWidth?: number
   deviceHeight?: number
+  signal?: AbortSignal
 }
 
 /** 基于 @main/adb 的 GatherIo 实现。 */
@@ -41,8 +42,10 @@ export class AdbGatherIo implements GatherIo {
   private readonly refWidth: number
   private readonly refHeight: number
   private size: { width: number; height: number } | null
+  private readonly signal?: AbortSignal
 
   constructor(opts: AdbGatherIoOptions) {
+    this.signal = opts.signal
     this.serial = opts.serial
     this.refWidth = opts.refWidth ?? REF_WIDTH
     this.refHeight = opts.refHeight ?? REF_HEIGHT
@@ -53,6 +56,7 @@ export class AdbGatherIo implements GatherIo {
   }
 
   async capture(): Promise<RawFrame> {
+    this.check()
     const raw = await captureRaw(this.serial)
     // 每帧都顺手校准一次设备分辨率 —— 这是唯一可信来源。
     this.size = { width: raw.width, height: raw.height }
@@ -61,6 +65,7 @@ export class AdbGatherIo implements GatherIo {
 
   async tap(x: number, y: number): Promise<void> {
     const p = await this.toDevice(x, y)
+    this.check()
     await adbTap(this.serial, p.x, p.y)
   }
 
@@ -70,20 +75,24 @@ export class AdbGatherIo implements GatherIo {
       const p = await this.toDevice(x, y)
       out.push([p.x, p.y])
     }
+    this.check()
     await adbTapMany(this.serial, out, gapMs)
   }
 
   async swipe(x1: number, y1: number, x2: number, y2: number, durationMs: number): Promise<void> {
     const a = await this.toDevice(x1, y1)
     const b = await this.toDevice(x2, y2)
+    this.check()
     await adbSwipe(this.serial, a.x, a.y, b.x, b.y, durationMs)
   }
 
   async key(k: AndroidKey): Promise<void> {
+    this.check()
     await adbKey(this.serial, k)
   }
 
   async launchApp(packageName: string, cold = false): Promise<void> {
+    this.check()
     await launch(this.serial, packageName, cold)
   }
 
@@ -95,19 +104,30 @@ export class AdbGatherIo implements GatherIo {
   async ensureGameForeground(packageName: string): Promise<GamePresence> {
     return ensureGameForeground(
       {
-        foreground: () => foregroundPackage(this.serial),
-        launch: () => launchViaMonkey(this.serial, packageName),
-        isRunning: () => isRunning(this.serial, packageName)
+        foreground: () => {
+          this.check()
+          return foregroundPackage(this.serial)
+        },
+        launch: () => {
+          this.check()
+          return launchViaMonkey(this.serial, packageName)
+        },
+        isRunning: () => {
+          this.check()
+          return isRunning(this.serial, packageName)
+        }
       },
       { packageName }
     )
   }
 
   async stopApp(packageName: string): Promise<void> {
+    this.check()
     await forceStop(this.serial, packageName)
   }
 
   async foregroundPackage(): Promise<string | null> {
+    this.check()
     return foregroundPackage(this.serial)
   }
 
@@ -121,6 +141,7 @@ export class AdbGatherIo implements GatherIo {
   }
 
   private async ensureSize(): Promise<{ width: number; height: number }> {
+    this.check()
     if (this.size) return this.size
     const cached = getCached(this.serial)
     if (cached && cached.screenWidth > 0 && cached.screenHeight > 0) {
@@ -130,6 +151,10 @@ export class AdbGatherIo implements GatherIo {
     const raw = await captureRaw(this.serial)
     this.size = { width: raw.width, height: raw.height }
     return this.size
+  }
+
+  private check(): void {
+    if (this.signal?.aborted) throw new GatherHalt('cancelled', '自动采集已被中止。')
   }
 }
 

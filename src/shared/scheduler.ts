@@ -158,6 +158,8 @@ export interface InstanceQueueState {
   auto: boolean
   /** 当前正在采样（面板可以显示转圈并禁用手动采样按钮）。 */
   sampling: boolean
+  /** 当前设备操作尚未结束；auto=false 时可显示“正在停止”。不持久化。 */
+  operating?: boolean
   /** 下一次唤醒的绝对时刻；没有排期为 null。 */
   nextWakeAt: number | null
   /** 下一次唤醒的中文理由，如「队列释放校验」「周期校准」「退避重试 60s」。 */
@@ -294,7 +296,13 @@ function fillProgress(m: MarchState, now: number): number | null {
 /** 按当前时刻把一支队伍换算成 UI 视图。不做任何 IO。 */
 export function deriveMarchView(m: MarchState, now: number = Date.now()): MarchView {
   if (m.status === 'idle') {
-    return { phase: 'idle', phaseText: '空闲', remainingMs: null, untilFreeMs: null, progress: null }
+    return {
+      phase: 'idle',
+      phaseText: '空闲',
+      remainingMs: null,
+      untilFreeMs: null,
+      progress: null
+    }
   }
 
   const untilFree = m.freeAt == null ? null : Math.max(0, m.freeAt - now)
