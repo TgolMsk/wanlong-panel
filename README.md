@@ -185,7 +185,9 @@ npm run format       # prettier
 npm version 0.3.0 --no-git-tag-version   # 改 package.json / package-lock.json 的 version
 git commit -am "release: v0.3.0"
 git tag v0.3.0
-git push origin main v0.3.0                # 标签一到 GitHub 就开始构建，约 6~10 分钟后 Release 页面出现安装包
+git push origin main                       # 先推分支
+git push origin v0.3.0                     # ★ 标签要单独推：和分支一起推时 GitHub 只会为 main 起构建，标签不触发（2026-09-17 实测）
+                                           #   标签一到 GitHub 就开始构建，约 4 分钟后 Release 页面出现安装包
 ```
 
 附件文件名用的是 package.json 的 `name`（ASCII）而不是「万龙面板」：GitHub 会把附件名里的中文规范化成一串点。
