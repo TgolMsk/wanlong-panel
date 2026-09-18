@@ -321,7 +321,7 @@ async function cmdRun(): Promise<void> {
   await jot('info', `配置：等级策略=${JSON.stringify(config.levelPolicy)}`)
   await jot(
     'info',
-    `上一轮运行期状态：maxLevel=${state.maxLevel ?? '未探测'}，在途 ${state.inFlight.length} 支`
+    `上一轮运行期状态：等级记忆=${JSON.stringify(state.levelByResource ?? {})}，在途 ${state.inFlight.length} 支`
   )
 
   const t0 = Date.now()
@@ -345,7 +345,7 @@ async function cmdRun(): Promise<void> {
   )
   console.log(`说明：${r.message}`)
   console.log(`队列：${r.queue ? `${r.queue.used}/${r.queue.total}` : '未读到'}`)
-  console.log(`探测到的等级上限：${r.state.maxLevel ?? '未探测'}`)
+  console.log(`等级记忆（按资源：滑杆上限 / 搜不到的下限）：${JSON.stringify(r.state.levelByResource)}`)
   for (const d of r.dispatched) {
     console.log(
       `派出：${d.resource} 搜索下限=${d.searchFloor} → 实际点等级=${d.level ?? '?'} ` +

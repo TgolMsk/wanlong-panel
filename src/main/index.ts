@@ -155,6 +155,13 @@ import { getAlertCenter } from '@main/alerts/center'
 import { FailureTracker } from '@main/alerts/detect'
 import { probeKickedOnRawFrame } from '@main/alerts/kicked'
 import { getNotifyHub } from '@main/alerts/notifier'
+import { FreezeGuard } from '@main/alerts/freeze'
+import {
+  FREEZE_STAGE_TEXT,
+  recoverFrozenInstance,
+  type FreezeRecoveryIo
+} from '@main/alerts/freezeRecovery'
+import { isBooted } from '@main/adb/connection'
 
 // ── Telegram 机器人动作 + 面板测试通道 ────────────────────────────────────
 import { BOT_PHOTO_JPEG_QUALITY, BOT_PHOTO_MAX_WIDTH, shotFilename } from '@shared/bot'
@@ -388,9 +395,11 @@ function schedulerDeps(): SchedulerDeps {
           : { kind: 'paused', at, instanceIndex: index, reason: null }
       )
     },
-    // 连续采样失败 = 模拟器或游戏掉线。★ 这是同步回调，不能 await，
+    // 连续采样失败 = 模拟器或游戏掉线。调度器在实例锁内 await 这个回调：
+    //   要按「掉线」暂停之前，先问卡死看门狗 —— 失败期间画面一直纹丝不动（或截图一直超时）
+    //   而模拟器进程还在，那是卡死不是掉线，就地重启一次；重启成功就不暂停，失败才暂停。
     //   raiseAlertQuietly 会把 setAuto(false) 放到下一个微任务里跑（不抢锁，安全）。
-    onSampleResult: (index, ok, message) => {
+    onSampleResult: async (index, ok, message, ctx) => {
       if (ok) {
         failureTracker.noteSampleOk(index)
         return
@@ -398,7 +407,23 @@ function schedulerDeps(): SchedulerDeps {
       // 已经被（比如顶号探针）暂停的实例，不再累计、不再二次推送。
       if (alertCenter.isPaused(index)) return
       const event = failureTracker.noteSampleFailed(index, message ?? '原因未知')
-      if (event) raiseAlertQuietly(event)
+      if (!event) return
+      const r = await tryFreezeRecovery(index, '连续采样失败', ctx?.signal, false)
+      if (r.outcome === 'recovered') return
+      raiseAlertQuietly(
+        r.outcome === 'skipped' ? event : { ...event, reason: `${event.reason} ${r.note}` }
+      )
+    },
+
+    // 每一帧都喂给卡死看门狗（只做像素比对与计时，几十微秒）；截不到帧也要告诉它。
+    onFrameCaptured: (index, raw) => {
+      lastFrames.set(index, raw)
+      freezeGuard.observe(index, raw)
+    },
+    onCaptureFailed: (index, err) => freezeGuard.noteCaptureFailed(index, err.message),
+    // 健康探针连帧都截不到：adb 可能已经挂住。看门狗按完整阈值判，够格就重启。
+    onHealthProbeFailed: async (index, _err, ctx) => {
+      await tryFreezeRecovery(index, '健康探针取帧失败', ctx.signal, true)
     },
 
     // ★ 采样器认不出界面时，用同一帧跑顶号探针 —— 零额外截图，第一次采样就能判定。
@@ -428,8 +453,215 @@ function schedulerDeps(): SchedulerDeps {
             detail: { 前台包名: ctx.foreground ?? '未知', 游戏进程: '不在' }
           })
         )
+        return
       }
+      // 游戏进程还在、画面却长时间纹丝不动 —— 这是「队列满着、几小时不采样」时唯一能发现卡死的地方。
+      await tryFreezeRecovery(index, '健康探针', ctx.signal, true)
     }
+  }
+}
+
+// ── 卡死看门狗：画面长时间不动 → 自动重启模拟器 → 拉起游戏 → 继续调度 ────────
+//
+// 判定（freeze.ts）与流程（freezeRecovery.ts）都是纯逻辑，这里只做接线：
+//   · 每一帧喂给 FreezeGuard（上面的 onFrameCaptured / onCaptureFailed）
+//   · 两条触发路：健康探针（完整阈值，默认画面 5 分钟不变）与「连续采样失败、马上要按掉线暂停」（降档门槛）
+//   · 重启走 scheduler.exclusive()：两条路都在实例锁内被调，重入放行；退出面板时 freezeShutdown 中止它
+//   · 成功 → 推一条「模拟器卡死已自动重启」（不暂停），清失败计数，让调度器接着跑
+//   · 失败 / 熔断 → 按原来的「模拟器或游戏掉线」暂停 + 推送，原因里写清楚重启卡在哪一步
+
+const freezeGuard = new FreezeGuard({ config: () => alertCenter.detectConfig(), log: alertLog })
+/** 每实例最近一帧（留痕用：判定卡死时把「纹丝不动」的那张图存下来给通知）。 */
+const lastFrames = new Map<number, RawFrame>()
+/** 正在恢复中的实例：同一实例绝不并发跑两条恢复。 */
+const freezeRecovering = new Set<number>()
+/** 面板退出时中止所有恢复流程，别让 scheduler.stop() 等上五分钟。 */
+const freezeShutdown = new AbortController()
+
+type FreezeAttempt =
+  | { outcome: 'recovered' }
+  | { outcome: 'skipped' }
+  /** 判定了卡死、也试过重启（或熔断了），但没救回来：note 是要拼进掉线告警原因里的中文说明。 */
+  | { outcome: 'failed'; note: string }
+
+/**
+ * 卡死判定 + 自动重启。**必须在调度器的实例锁内调**（两条触发路都满足），返回后调用方决定要不要按掉线暂停。
+ * @param strict true = 健康探针路径，按完整阈值（freezeMinutes）判；false = 采样已连续失败，按降档门槛判。
+ */
+async function tryFreezeRecovery(
+  index: number,
+  trigger: string,
+  signal: AbortSignal | undefined,
+  strict: boolean
+): Promise<FreezeAttempt> {
+  const cfg = alertCenter.detectConfig()
+  if (!cfg.freezeRestartEnabled) return { outcome: 'skipped' }
+  if (alertCenter.isPaused(index) || freezeRecovering.has(index)) return { outcome: 'skipped' }
+  const verdict = strict ? freezeGuard.assess(index) : freezeGuard.assessAfterFailures(index)
+  if (!verdict) return { outcome: 'skipped' }
+
+  // 前提：模拟器进程还在。进程都没了不叫卡死（用户可能自己关的），走原来的掉线暂停。
+  let inst = mumu.get(index)
+  try {
+    inst = (await mumu.refresh()).find((i) => i.index === index) ?? inst
+  } catch (e) {
+    alertLog(
+      'warn',
+      `[卡死][实例${index}] 刷新实例列表失败，按缓存判断：${AppError.from(e).message}`
+    )
+  }
+  if (!inst || inst.state !== 'running') {
+    alertLog(
+      'info',
+      `[卡死][实例${index}] ${verdict.reason}，但实例状态是「${inst?.state ?? '不存在'}」而不是运行中，不按卡死处理。`
+    )
+    return { outcome: 'skipped' }
+  }
+
+  const budget = freezeGuard.restartBudget(index)
+  const tag = `[卡死][实例${index}]`
+  if (!budget.allowed) {
+    const note =
+      `${verdict.reason}，判定模拟器卡死；但 ${budget.windowMin} 分钟内已自动重启 ${budget.used} 次` +
+      `（上限 ${budget.limit}），不再重启。`
+    alertLog('warn', `${tag} ${note}`)
+    if (strict) await raiseFrozenOffline(index, note)
+    return { outcome: 'failed', note }
+  }
+
+  const shotPath = await saveFrozenShot(index)
+  alertLog(
+    'warn',
+    `${tag} ${verdict.reason}（触发：${trigger}），判定模拟器卡死，开始第 ${budget.used + 1}/${budget.limit} 次自动重启。`
+  )
+  freezeGuard.noteRestart(index)
+  freezeRecovering.add(index)
+  const startedAt = Date.now()
+  const combined = signal ? AbortSignal.any([signal, freezeShutdown.signal]) : freezeShutdown.signal
+  try {
+    const result = await scheduler.exclusive(index, '卡死重启', () =>
+      recoverFrozenInstance(freezeRecoveryIo(index, combined), { gamePackage: GAME_PACKAGE })
+    )
+    if (result.ok) {
+      const seconds = Math.round(result.elapsedMs / 1000)
+      alertLog(
+        'info',
+        `${tag} 自动重启完成（${result.steps.join(' → ')}，耗时 ${seconds}s），自动调度继续。`
+      )
+      failureTracker.reset(index)
+      raiseAlertQuietly(
+        makeAlertEvent({
+          type: 'emulatorFrozen',
+          instanceIndex: index,
+          reason:
+            `${verdict.reason}，判定模拟器卡死。已自动重启实例并重新拉起游戏（${result.steps.join(' → ')}，` +
+            `耗时 ${seconds}s），自动调度继续。`,
+          shotPath,
+          detail: {
+            触发: trigger,
+            主界面: result.loaded ? '已认出' : '尚未认出，交给采样时的弹窗阶梯',
+            本窗口重启次数: `${budget.used + 1}/${budget.limit}`
+          }
+        })
+      )
+      return { outcome: 'recovered' }
+    }
+    const note =
+      `${verdict.reason}，判定模拟器卡死；自动重启失败（卡在：${FREEZE_STAGE_TEXT[result.stage as keyof typeof FREEZE_STAGE_TEXT] ?? result.stage}）：` +
+      `${result.reason ?? '原因未知'}`
+    alertLog('error', `${tag} ${note}`)
+    if (strict) await raiseFrozenOffline(index, note, shotPath)
+    return { outcome: 'failed', note }
+  } catch (e) {
+    const err = AppError.from(e)
+    if (err.code === 'RUN_ABORTED' || combined.aborted) {
+      alertLog('warn', `${tag} 自动重启被中止（自动调度已关闭或面板正在退出）。`)
+      return { outcome: 'skipped' }
+    }
+    const note = `${verdict.reason}，判定模拟器卡死；自动重启过程出错：${err.message}`
+    alertLog('error', `${tag} ${note}`)
+    if (strict) await raiseFrozenOffline(index, note, shotPath)
+    return { outcome: 'failed', note }
+  } finally {
+    freezeRecovering.delete(index)
+    // 不管成没成功，画面计时都从头来：重启后的第一帧不该和卡死前的比。
+    freezeGuard.reset(index)
+    alertLog('debug', `${tag} 恢复流程结束，耗时 ${Math.round((Date.now() - startedAt) / 1000)}s。`)
+  }
+}
+
+/** 健康探针路径上没有现成的告警事件，卡死又救不回来时在这里按「掉线」暂停。 */
+async function raiseFrozenOffline(
+  index: number,
+  note: string,
+  shotPath?: string | null
+): Promise<void> {
+  if (alertCenter.isPaused(index)) return
+  raiseAlertQuietly(
+    makeAlertEvent({
+      type: 'deviceOffline',
+      instanceIndex: index,
+      reason: `${note} 请手动重启模拟器并把游戏拉起来后点「恢复」。`,
+      shotPath: shotPath ?? (await saveFrozenShot(index)),
+      detail: { 判定: '卡死', 自动重启: '未能恢复' }
+    })
+  )
+}
+
+/** 把「纹丝不动」的最后一帧留痕（跟随 shotPolicy；截不到帧或没截过就 null）。 */
+async function saveFrozenShot(index: number): Promise<string | null> {
+  const raw = lastFrames.get(index)
+  if (!raw) return null
+  try {
+    return await saveAlertShot(index, 'frozen', raw)
+  } catch (e) {
+    alertLog('warn', `[卡死][实例${index}] 留痕失败（不影响重启）：${AppError.from(e).message}`)
+    return null
+  }
+}
+
+/** 恢复流程要的设备能力：驱动重启 / 状态、adb 重连、开机探测、monkey 拉起、截图与主界面识别。 */
+function freezeRecoveryIo(index: number, signal: AbortSignal): FreezeRecoveryIo {
+  const log = (level: 'debug' | 'info' | 'warn', message: string): void =>
+    alertLog(level, `[卡死][实例${index}] ${message}`)
+  let templatesPromise: ReturnType<typeof getGatherTemplates> | null = null
+  const templates = (): ReturnType<typeof getGatherTemplates> =>
+    (templatesPromise ??= getGatherTemplates(paths().templatesDir, (l, m, d) =>
+      alertLog(l, `[卡死][实例${index}] ${m}`, d)
+    ))
+  return {
+    restartInstance: () => mumu.restart(index),
+    instanceState: async () => {
+      const inst = (await mumu.refresh()).find((i) => i.index === index)
+      if (!inst) return null
+      return {
+        processStarted: inst.state === 'running' || inst.state === 'starting',
+        androidStarted: inst.screenReady,
+        pid: inst.pid
+      }
+    },
+    dropDevice: async () => {
+      try {
+        await adb.detach(index)
+      } catch {
+        // 旧连接本来就可能已经死了，断不掉无所谓。
+      }
+      mumu.patch(index, { adb: 'disconnected' })
+    },
+    // ★ 端口由驱动现读（ensureDevice 内部比对 serial），绝不沿用重启前的。
+    attachDevice: async () => (await ensureDevice(deps, index, { force: true })).serial,
+    isBooted: (serial) => isBooted(serial),
+    foreground: (serial) => foregroundPackage(serial),
+    // ★ 必须是 monkey：am start 对本游戏返回成功但进程起不来（adb/apps.ts 实测）。
+    launchGame: (serial) => launchViaMonkey(serial, GAME_PACKAGE),
+    isGameRunning: (serial) => isRunning(serial, GAME_PACKAGE),
+    capture: (serial) => captureRaw(serial),
+    recognize: async (raw) => {
+      const t = await templates()
+      return isRecognizableScreen(t, raw, { refWidth: t.refWidth, refHeight: t.refHeight })
+    },
+    log,
+    signal
   }
 }
 
@@ -1312,6 +1544,8 @@ async function bootstrap(): Promise<void> {
 async function shutdown(): Promise<void> {
   await login.shutdown()
   safely('停止实例轮询', () => registry.stop())
+  // 卡死恢复流程要先中止：它在实例锁内跑，scheduler.stop() 会等锁，不中止就得等它跑完（可能好几分钟）。
+  safely('中止卡死恢复流程', () => freezeShutdown.abort())
   // 调度器的定时器虽然都 unref 过（不会钉住进程），但状态要趁还活着落盘。
   try {
     await scheduler.stop()

@@ -85,14 +85,36 @@ export interface DispatchRecord {
 }
 
 /**
+ * 每种资源各自的等级记忆。
+ *
+ * ★ 按资源分，不共用：每个分类的滑杆上限可以不一样（2026-09-18 真机实证：魔水池滑杆能推到 10，
+ *   附近却只有 8 级点；以前四种资源共用一个上限，魔水探到 10 会把伐木场 / 金矿 / 铁矿也带到「下限 9」）。
+ * ★ 滑杆上限 ≠ 附近真有的最高等级，所以还要记「从哪个下限起才搜得到点」（noResultFloor）。
+ *   决策逻辑在 levelMemory.ts，这里只是数据。
+ */
+export interface ResourceLevelMemory {
+  /** 动态探测到的**滑杆**上限（把滑杆推到最右读到的数）。 */
+  maxLevel: number | null
+  /** 上次探测上限的时刻。 */
+  probedAt: number | null
+  /** 已确认「这个搜索下限附近搜不到点」的最低下限；下一轮从它 −1 起步。null = 没有记忆。 */
+  noResultFloor: number | null
+  /** 写入 noResultFloor 的时刻。记忆与上限探测同寿命（searchRetry.probeIntervalMin）。 */
+  noResultAt: number | null
+}
+
+export type LevelMemoryMap = Partial<Record<GatherResourceType, ResourceLevelMemory>>
+
+/**
  * 跨轮持久化的运行期状态。
  * 由调度器负责存取（内存或落盘皆可），采集模块只读改不落盘。
  */
 export interface GatherRuntimeState {
-  /** 动态探测到的资源等级上限。 */
-  maxLevel: number | null
-  /** 上次探测上限的时刻。 */
-  maxLevelProbedAt: number | null
+  /**
+   * 每种资源的等级记忆（滑杆上限缓存 + 「搜不到」的下限记忆）。
+   * 旧版本的 `maxLevel` / `maxLevelProbedAt` 是四种资源共用的一个值，读到旧状态文件时直接丢弃、重新探测。
+   */
+  levelByResource: LevelMemoryMap
   /** 退避序列游标。派兵成功后清零。 */
   backoffIndex: number
   /** 「下限已放宽到底仍搜不到」后的冷却截止时刻。 */
@@ -117,8 +139,7 @@ export interface GatherRuntimeState {
 
 export function createRuntimeState(): GatherRuntimeState {
   return {
-    maxLevel: null,
-    maxLevelProbedAt: null,
+    levelByResource: {},
     backoffIndex: 0,
     giveUpUntil: null,
     dispatchTimestamps: [],

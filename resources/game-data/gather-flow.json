@@ -1216,7 +1216,7 @@
    "name": "探测等级上限 maxLv",
    "pre": "G4 通过；searchRetry.probeMaxLevel=true 且缓存已过期（probeIntervalMin）",
    "detect": "swipe 滑杆 从 (anchor+sliderTrackLeft) 到 (anchor+sliderOvershootRight)，duration 500ms → 匹配 tpl_label_level 定位标签、取其右侧 90px 读数得 v1 → 再 swipe 一次 → 读得 v2。★sliderOvershootRight 已从 +300 改为 +230（abs 1500）：+300 会把抬手点落在 [+] 按钮（实测 1513..1567）上。",
-   "success": "v1 == v2 且 1 <= v1 <= maxLevelHardCap ⇒ maxLv = v1，写缓存",
+   "success": "v1 == v2 且 1 <= v1 <= maxLevelHardCap ⇒ maxLv = v1，写缓存。★缓存按资源分别记（state.levelByResource[type]）：每个分类的滑杆上限可以不一样（2026-09-18 实证魔水池滑杆 10、附近只有 8 级点）。★滑杆上限 ≠ 附近真有的最高等级，起步下限还要看「搜不到」的记忆（levelMemory.ts planStartFloor：上次 F 级搜不到 ⇒ 本轮从 F−1 起步）",
    "fail": [
     "swipe 抛 SecurityException: INJECT_EVENTS → 重试 safety.swipeRetry 次（实测重试即成功）",
     "两次读数不等 → 再 swipe+读一次，取连续相同的两次；3 次仍不稳定 → 用 assumedMaxLevel 并记 warn",
@@ -1267,7 +1267,7 @@
     "坐标不与 inFlight[] 中任一目标重复（avoidDuplicateTarget 时）"
    ],
    "fail": [
-    "卡片没出现 → 可能没搜到；重试 G7 一次；仍无 → occupiedFails += 1",
+    "卡片没出现 → 这个下限附近没有点：★立刻放宽下限（不重试、不计入 occupiedFails），并在后续搜到卡片或本次放弃时把「下限 F 搜不到」记进 state.levelByResource[type].noResultFloor，下一轮直接从 F−1 起步（记忆寿命 = probeIntervalMin，上限探测值变了即作废）。以前把它当成 occupiedFails 在同一下限重试 4 次，每次白等 8 秒 + 约 9 张截图，截图熔断先到 → 魔水池永远派不出去（2026-09-18）",
     "采集者非「无」/ 储量不足 / 联盟不符 / 坐标重复 → occupiedFails += 1 → 回 G7 重搜（游戏会跳到下一个点）",
     "★等级 < searchFloor（理论上不会发生，游戏保证 >=）→ 记 error 级日志并留痕（说明滑杆没设对或等级数字识别错了），occupiedFails += 1 回 G7",
     "occupiedFails >= occupiedRetryLimit → searchFloor -= floorRelaxStep（放宽下限）；若 searchFloor < minLevel 则本轮放弃（按 schedule.giveUpCooldownMin 冷却后重试），否则 occupiedFails = 0 回 G6 重设滑杆",

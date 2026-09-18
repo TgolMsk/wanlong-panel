@@ -65,7 +65,10 @@ const RANGE = {
   retryCount: [0, 5],
   timeoutMs: [2_000, 120_000],
   threshold: [1, 20],
-  stalledMinutes: [5, 1440]
+  stalledMinutes: [5, 1440],
+  freezeMinutes: [2, 60],
+  freezeRestartLimit: [1, 10],
+  freezeRestartWindowMin: [10, 1440]
 } as const
 
 /**
@@ -91,6 +94,10 @@ interface AlertFormValues {
   sampleFailThreshold: number
   stalledMinutes: number
   kickedProbeEnabled: boolean
+  freezeRestartEnabled: boolean
+  freezeMinutes: number
+  freezeRestartLimit: number
+  freezeRestartWindowMin: number
 }
 
 /** 打码视图 -> 表单值。★ botToken 永远填空串（面板根本拿不到明文）。 */
@@ -109,7 +116,11 @@ function toFormValues(view: AlertsConfigView): AlertFormValues {
     recoveryFailThreshold: view.detect.recoveryFailThreshold,
     sampleFailThreshold: view.detect.sampleFailThreshold,
     stalledMinutes: view.detect.stalledMinutes,
-    kickedProbeEnabled: view.detect.kickedProbeEnabled
+    kickedProbeEnabled: view.detect.kickedProbeEnabled,
+    freezeRestartEnabled: view.detect.freezeRestartEnabled,
+    freezeMinutes: view.detect.freezeMinutes,
+    freezeRestartLimit: view.detect.freezeRestartLimit,
+    freezeRestartWindowMin: view.detect.freezeRestartWindowMin
   }
 }
 
@@ -123,7 +134,11 @@ function toPatch(v: AlertFormValues): AlertsConfigPatch {
       recoveryFailThreshold: v.recoveryFailThreshold,
       sampleFailThreshold: v.sampleFailThreshold,
       stalledMinutes: v.stalledMinutes,
-      kickedProbeEnabled: v.kickedProbeEnabled
+      kickedProbeEnabled: v.kickedProbeEnabled,
+      freezeRestartEnabled: v.freezeRestartEnabled,
+      freezeMinutes: v.freezeMinutes,
+      freezeRestartLimit: v.freezeRestartLimit,
+      freezeRestartWindowMin: v.freezeRestartWindowMin
     },
     telegram: {
       enabled: v.enabled,
@@ -303,7 +318,7 @@ export default function AlertSettingsCard(): React.JSX.Element {
         type="info"
         showIcon
         style={{ marginBottom: 'var(--wl-space-4)' }}
-        message="被顶号、卡死、掉线时自动暂停并推送到 Telegram"
+        message="被顶号、掉线时自动暂停并推送到 Telegram；模拟器卡死则自动重启"
         description={
           <div className="wla-form-note">
             账号在别的设备登录（顶号）、弹了维护/更新公告、模拟器崩了、网络断了 ——
@@ -311,6 +326,10 @@ export default function AlertSettingsCard(): React.JSX.Element {
             「未知界面恢复阶梯连续用尽」或「连续多轮采集都失败」就判为需要人工介入，
             <b>关掉这个实例的自动调度</b>（不再排唤醒，不再操作游戏）、留一张现场截图，并推送到
             Telegram。 处理完之后到「群控倒计时」页点那张红卡上的「恢复」。
+            <br />
+            模拟器<b>卡死</b>（画面长时间纹丝不动、或截图一直超时但进程还在）是另一条路：
+            面板会<b>自动重启该实例、重新拉起游戏并接着跑</b>，只推一条通知，不需要人工介入；
+            重启失败或一小时内反复卡死才会转成「掉线」暂停。
           </div>
         }
       />
@@ -588,6 +607,62 @@ export default function AlertSettingsCard(): React.JSX.Element {
               extra="对应的界面模板还没采集到，所以现在打开也只是空跑，不会报错、不会影响采集；等补上顶号截图后自动生效。在此之前顶号会被上面的通用兜底接住。"
             >
               <Switch />
+            </Form.Item>
+          </Col>
+        </Row>
+
+        <Divider titlePlacement="start" style={{ margin: '4px 0 12px' }}>
+          卡死自动重启
+        </Divider>
+
+        <Form.Item
+          name="freezeRestartEnabled"
+          label="画面长时间不动时自动重启模拟器"
+          valuePropName="checked"
+          extra="判据是像素级的：健康探针（默认每 3 分钟）和采样截到的图连续一模一样、或截图一直超时但模拟器进程还在，就判定卡死。之后自动重启该实例 → 重连 adb → 用 monkey 拉起游戏 → 等主界面，全程约 3~5 分钟，自动调度接着跑。关掉之后卡死会按原来的「连续采样失败 → 掉线暂停」处理。"
+        >
+          <Switch />
+        </Form.Item>
+
+        <Row gutter={12}>
+          <Col span={8}>
+            <Form.Item
+              name="freezeMinutes"
+              label="多久不动判卡死（分钟）"
+              extra="至少要跨两次健康探针，所以实际发现时间 ≈ 这个值 + 一个探针间隔。活着的游戏几分钟内不可能一个像素都不变，不必设太大。"
+            >
+              <InputNumber
+                min={RANGE.freezeMinutes[0]}
+                max={RANGE.freezeMinutes[1]}
+                style={{ width: '100%' }}
+              />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item
+              name="freezeRestartLimit"
+              label="窗口内最多自动重启几次"
+              extra="超过就不再重启，改判「模拟器或游戏掉线」暂停并推送。这是防「重启 → 又卡 → 再重启」死循环的熔断。"
+            >
+              <InputNumber
+                min={RANGE.freezeRestartLimit[0]}
+                max={RANGE.freezeRestartLimit[1]}
+                style={{ width: '100%' }}
+              />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item
+              name="freezeRestartWindowMin"
+              label="统计窗口（分钟）"
+              extra="上一项按这个时间窗口滚动计数。"
+            >
+              <InputNumber
+                min={RANGE.freezeRestartWindowMin[0]}
+                max={RANGE.freezeRestartWindowMin[1]}
+                step={10}
+                style={{ width: '100%' }}
+              />
             </Form.Item>
           </Col>
         </Row>

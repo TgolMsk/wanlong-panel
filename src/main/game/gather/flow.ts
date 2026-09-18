@@ -40,11 +40,24 @@ import {
   ensureWorldMap
 } from './navigation'
 import {
+  effectiveMaxLevel,
+  expireNoResult,
+  isMaxLevelStale,
+  learnFromSearch,
+  levelMemoryOf,
+  onCard,
+  onNoCard,
+  onUnsuitable,
+  planStartFloor,
+  recordMaxLevel,
+  sanitizeLevelMemory,
+  startFloorSearch,
+  type FloorStep
+} from './levelMemory'
+import {
   findSearchAnchor,
-  initialSearchFloor,
   openSearchPanel,
   probeMaxLevel,
-  relaxSearchFloor,
   selectCategory,
   setSearchFloor,
   tapSearch,
@@ -361,25 +374,39 @@ async function dispatchOne(
   let anchor: SearchAnchor = await openSearchPanel(s)
   anchor = await selectCategory(s, entry.type, anchor)
 
-  // ── G5：等级上限（带缓存，上限随游戏进程增长但变化极慢）────────────────
-  let maxLv = state.maxLevel
-  const stale =
-    state.maxLevelProbedAt === null ||
-    s.now() - state.maxLevelProbedAt > cfg.searchRetry.probeIntervalMin * 60_000
-  if (cfg.searchRetry.probeMaxLevel && stale) {
+  // ── G5：滑杆上限（★ 按资源各自缓存：每个分类的滑杆上限可以不一样；上限随游戏进程增长但变化极慢）──
+  const retry = cfg.searchRetry
+  const mem = levelMemoryOf(state, entry.type)
+  if (retry.probeMaxLevel && isMaxLevelStale(mem, s.now(), retry.probeIntervalMin)) {
     const probed = await probeMaxLevel(s, anchor, policy)
-    maxLv = probed.maxLevel
-    state.maxLevel = probed.maxLevel
-    state.maxLevelProbedAt = s.now()
+    const r = recordMaxLevel(mem, probed.maxLevel, s.now())
+    if (r.forgotNoResult !== null) {
+      s.log(
+        'info',
+        `「${label}」的滑杆上限从 ${r.previous ?? '未知'} 变成 ${probed.maxLevel}，` +
+          `作废「下限 ${r.forgotNoResult} 级搜不到」的记忆。`
+      )
+    }
   }
-  if (maxLv === null) {
-    maxLv = policy.mode === 'relative' ? policy.assumedMaxLevel : policy.maxLevelHardCap
+  const maxLv = effectiveMaxLevel(mem, policy)
+  const expired = expireNoResult(mem, s.now(), retry.probeIntervalMin)
+  if (expired !== null) {
+    s.log('debug', `「${label}」「下限 ${expired} 级搜不到」的记忆已过期，本轮重新从策略下限试起。`)
   }
 
   // ★ searchFloor 是**搜索下限**：游戏会返回等级 >= 它的点，可能是它本身，也可能更高。
-  let searchFloor = initialSearchFloor(policy, maxLv)
-  let occupiedFails = 0
-  s.log('info', `开始为「${label}」找点：等级上限 ${maxLv}，搜索下限 ${searchFloor}。`)
+  // ★ 滑杆上限 ≠ 附近真有的最高等级（魔水池实测滑杆 10、附近只有 8 级），所以起步下限还要看记忆：
+  //   上次「9 级搜不到」，这一轮直接从 8 起步，别再白等一次 8 秒的空搜。
+  const plan = planStartFloor(policy, mem, maxLv, s.now(), retry.probeIntervalMin)
+  let search = startFloorSearch(plan.floor)
+  s.log(
+    'info',
+    `开始为「${label}」找点：滑杆上限 ${maxLv}，搜索下限 ${plan.floor}` +
+      (plan.fromMemory
+        ? `（策略算出 ${plan.policyFloor}，但上次 ${mem.noResultFloor} 级附近搜不到，直接从 ${plan.floor} 起步）`
+        : '') +
+      '。'
+  )
 
   const busyCoords = new Set(
     state.inFlight.map((r) => r.coord).filter((c): c is string => Boolean(c))
@@ -388,10 +415,7 @@ async function dispatchOne(
   for (;;) {
     s.ensureAlive()
     if (s.captures + 4 > cfg.safety.maxCapturesPerCycle) {
-      return {
-        kind: 'giveUp',
-        reason: `为「${label}」找点时截图配额用尽（已用 ${s.captures} 张），本轮先收尾。`
-      }
+      return giveUp(`为「${label}」找点时截图配额用尽（已用 ${s.captures} 张），本轮先收尾。`)
     }
 
     // 面板可能被上一次搜索的卡片盖住/关掉了，先确保它还在。
@@ -404,21 +428,39 @@ async function dispatchOne(
     }
 
     // ── G6 / G7 ────────────────────────────────────────────────────────
-    await setSearchFloor(s, anchor, searchFloor, policy.maxLevelHardCap)
+    await setSearchFloor(s, anchor, search.floor, policy.maxLevelHardCap)
     await tapSearch(s, anchor)
 
     // ── G8 ─────────────────────────────────────────────────────────────
     const cardAnchor = await waitForCard(s)
     if (!cardAnchor) {
-      s.log('warn', `搜索后没出现资源点卡片（下限 ${searchFloor}），换一次。`)
-      const relaxed = bumpFail()
-      if (relaxed) return relaxed
+      // ★ 没出卡片 = 这个下限附近没有点。以前当成「点不合适」在同一下限上白等 4 次（每次 8 秒 + 约 9 张截图），
+      //   截图熔断先到、下一轮又从头来 —— 魔水池滑杆 10、附近只有 8 级时永远派不出去。现在立刻放宽。
+      s.log('warn', `搜索后没出现资源点卡片：附近没有 ≥ ${search.floor} 级的「${label}」。`)
+      const done = applyStep(onNoCard(search, policy, retry))
+      if (done) return done
       continue
     }
+    // 卡片出现了 ⇒ 搜索机制正常；此前观察到的「更高下限搜不到」现在可以确认写进记忆。
+    const learned = learnFromSearch(mem, search, s.now(), retry.probeIntervalMin, search.floor)
+    if (learned.committed !== null) {
+      s.log(
+        'info',
+        `记住：「${label}」下限 ${learned.committed} 级附近搜不到点，接下来 ${retry.probeIntervalMin} 分钟内` +
+          `直接从 ${Math.max(policy.minLevel, learned.committed - 1)} 级起步。`
+      )
+    }
+    if (learned.forgot !== null) {
+      s.log(
+        'info',
+        `「${label}」在下限 ${search.floor} 搜到了点，作废「下限 ${learned.forgot} 级搜不到」的旧记忆。`
+      )
+    }
+    search = onCard(search)
 
     const needAlliance = cfg.thresholds.allianceTerritory !== 'any'
     const card = await readCard(s, cardAnchor, needAlliance)
-    const verdict = validateCard(cfg, entry, card, searchFloor, busyCoords)
+    const verdict = validateCard(cfg, entry, card, search.floor, busyCoords)
 
     if (!verdict.ok) {
       if (verdict.kind === 'abort') {
@@ -434,8 +476,8 @@ async function dispatchOne(
         continue
       }
       s.log('info', `换点：${verdict.reason}`)
-      const relaxed = bumpFail()
-      if (relaxed) return relaxed
+      const done = applyStep(onUnsuitable(search, policy, retry))
+      if (done) return done
       continue
     }
 
@@ -456,8 +498,8 @@ async function dispatchOne(
     if (!result.ok) {
       if (result.kind === 'abort') return { kind: 'abort', reason: result.reason }
       s.log('info', `换点：${result.reason}`)
-      const relaxed = bumpFail()
-      if (relaxed) return relaxed
+      const done = applyStep(onUnsuitable(search, policy, retry))
+      if (done) return done
       continue
     }
 
@@ -475,7 +517,7 @@ async function dispatchOne(
         resource: entry.type,
         coord: card.coord,
         level: card.level,
-        searchFloor,
+        searchFloor: search.floor,
         storage: card.storage,
         travelTimeSec: result.travelTimeSec,
         troops: result.troops
@@ -483,33 +525,30 @@ async function dispatchOne(
     }
   }
 
-  /**
-   * 一次「这个点不合适」的记账。
-   * 达到上限就**放宽下限**（= 让更多候选点能被匹配到，不是「退而求其次采低级点」）。
-   * @returns 需要结束本次派兵时返回结果，否则 null（继续重搜）
-   */
-  function bumpFail(): DispatchOnce | null {
-    occupiedFails++
-    if (occupiedFails < cfg.searchRetry.occupiedRetryLimit) return null
-
-    const next = relaxSearchFloor(policy, searchFloor, cfg.searchRetry.floorRelaxStep)
-    if (next === null) {
-      return {
-        kind: 'giveUp',
-        reason:
-          `「${label}」连续 ${occupiedFails} 次都没找到可用的点，` +
-          `且搜索下限已经放宽到 ${searchFloor}（不能再低于 minLevel=${policy.minLevel}${
-            policy.mode === 'absolute' && !policy.allowRelax ? '，且配置不允许放宽' : ''
-          }），本轮放弃，进入冷却。`
-      }
+  /** 找点放弃：先把本次观察到的「搜不到」写进记忆（下一轮别再从头撞），再返回放弃。 */
+  function giveUp(reason: string): DispatchOnce {
+    const learned = learnFromSearch(mem, search, s.now(), retry.probeIntervalMin)
+    if (learned.committed !== null) {
+      s.log(
+        'info',
+        `记住：「${label}」下限 ${learned.committed} 级附近搜不到点，下一轮直接从 ` +
+          `${Math.max(policy.minLevel, learned.committed - 1)} 级起步。`
+      )
     }
-    s.log(
-      'info',
-      `同一下限连续 ${occupiedFails} 次没找到可用点，把搜索下限从 ${searchFloor} 放宽到 ${next}` +
-        '（放宽下限只是让更多点进入候选，仍可能采到高等级的点）。'
-    )
-    searchFloor = next
-    occupiedFails = 0
+    return { kind: 'giveUp', reason }
+  }
+
+  /**
+   * 执行下限状态机的一步（levelMemory.ts 的 onNoCard / onUnsuitable）。
+   * 「搜不到」立刻放宽、「点不合适」重试够次数才放宽 —— 两者分开计数是 2026-09-18 那次修正的核心。
+   * @returns 需要结束本次找点时返回结果，否则 null（按新状态继续重搜）
+   */
+  function applyStep(step: FloorStep): DispatchOnce | null {
+    search = step.state
+    if (step.kind === 'giveUp') {
+      return giveUp(`「${label}」${step.reason}，本轮放弃，进入冷却。`)
+    }
+    s.log('info', `「${label}」${step.reason}。`)
     return null
   }
 }
@@ -618,8 +657,8 @@ function cloneState(src?: GatherRuntimeState): GatherRuntimeState {
   const base = createRuntimeState()
   if (!src) return base
   return {
-    maxLevel: src.maxLevel ?? null,
-    maxLevelProbedAt: src.maxLevelProbedAt ?? null,
+    // 旧状态文件里四种资源共用的 maxLevel / maxLevelProbedAt 在这里被丢弃（sanitize 只认按资源分的那份），下一轮重新探测。
+    levelByResource: sanitizeLevelMemory(src.levelByResource),
     backoffIndex: src.backoffIndex ?? 0,
     giveUpUntil: src.giveUpUntil ?? null,
     dispatchTimestamps: [...(src.dispatchTimestamps ?? [])],

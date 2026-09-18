@@ -322,7 +322,7 @@ async function main(): Promise<void> {
       true
     )
     check('探过等级上限（两次 swipe）', io.actions.filter((a) => a.startsWith('swipe')).length, 2)
-    check('探测到的等级上限', r.state.maxLevel, 8)
+    check('探测到的等级上限（按资源记在 levelByResource.wood）', r.state.levelByResource.wood?.maxLevel ?? null, 8)
   }
 
   console.log(`\n===== 通过 ${pass} / 失败 ${fail} =====`)

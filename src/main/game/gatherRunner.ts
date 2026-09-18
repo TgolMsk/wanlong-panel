@@ -142,7 +142,9 @@ export const FAILURE_SHOT_LABELS: ReadonlySet<string> = new Set([
   'cycle-error',
   // 顶号 / 健康探针命中时的现场，必须留痕给面板与推送看。
   'kicked',
-  'health-probe'
+  'health-probe',
+  // 卡死看门狗判定「画面纹丝不动」时的最后一帧：重启前留痕，通知里带上。
+  'frozen'
 ])
 
 /** 从账号的 scriptParams 里把采集配置抠出来。给 deps.loadConfig 用的现成实现。 */

@@ -82,13 +82,15 @@ npm run dist:win     # electron-builder --win --x64（nsis + portable，未签�
 npm run dist:mac     # electron-builder --mac --arm64
 
 npm run smoke        # 端到端冒烟（真机，只按 HOME/APP_SWITCH + 点一次空白处）
-npm run check        # 全部离线自检（不碰模拟器、不发真实网络请求，672 项断言，约 50 秒）
-                     #   = check:ld(41) + check:mumu(65) + check:launch(22) + check:ai(76)
+npm run check        # 全部离线自检（不碰模拟器、不发真实网络请求，801 项断言，约 1 分钟）
+                     #   = check:ld(41) + check:mumu(65) + check:launch(22) + check:freeze(65) + check:level(64) + check:ai(76)
                      #   + check:sched(24) + check:gather(28，60 张真机截图回放)
                      #   + check:alerts(174) + check:bot(76) + check:stats(73) + check:resources(93)
                      #   ★ check:sched / check:gather 需要 gitignore 掉的 .tplkit/frames 真机截图，本机没有会报「找不到帧目录」
 npm run check:mumu   # MuMu 驱动纯函数（Windows）：info JSON 解析 / 状态映射 / errcode 判定 / setting 参数 / 安装目录探测
 npm run check:launch # ★ 冷启动恢复：游戏已在前台就绝不乱拉 / 没跑就 monkey 拉起并等前台 / 失败不抛（虚拟时钟）
+npm run check:freeze # ★ 卡死看门狗 + 自动重启：帧指纹 / 阈值与熔断（虚拟时钟）/ 恢复流程每一步的成败 / 与真·调度器的接线不死锁
+npm run check:level  # ★ 搜索等级记忆 + 下限状态机：滑杆上限按资源缓存 / 搜不出卡片立刻放宽 / 「F 级搜不到」跨轮记忆与作废 / 落盘往返（不需要真机截图）
 npm run check:ld     # 雷电驱动纯函数：list2 解析 / 状态映射 / GBK 解码 / 成败判定 / modify 参数
 npm run check:ai     # AI 顾问：配置三态 / 请求形状 / 失败分类 / ★ Key 泄露实测 / 限频 / ★ 端到端自学模板闭环（假 fetch + 假 IO + 合成帧）
 npm run check:alerts # 异常检测/自动暂停/Telegram 推送 + 机器人通道（含 ★ token 泄露实测、sendPhoto 走 FormData）
@@ -101,6 +103,7 @@ npm run live:run     # ★ 真机跑一整轮自动采集 —— 会真的派出
 npm run live:recheck -- 150   # 采样→等 150s→再采样，校验本地 ETA 递推
 npm run live:sample -- 1        # 对某个实例现场跑一次调度器采样（会切界面开关面板，不派兵），看导航判据命中哪张模板
                                 #   雷电不用给端口（按 5555+2·序号 自动算）；MuMu 要给：npm run live:sample -- 1 16416
+npm run live:freeze -- 0        # ★ 真机验证卡死恢复链路：会真的重启实例 0 → 重连 adb → monkey 拉起 → 等主界面（5 秒倒计时可 Ctrl+C）
 npm run tplkit -- alpha ...     # 多帧差分去底预览（透明底模板），save 作业写 diffFrames/diffTolerance
 npm run icons                   # resources/icons/raw/{wood,gold,iron,mana}.* 白底原画 → 透明底 assets/resources/<type>.png（面板资源徽章）
 ```
@@ -283,6 +286,11 @@ adb 会报 `-s requires an argument`。Node 的 `spawn` 用数组传参不受影
    行内资源类型按缩略图识别（`tpl_row_res_*`，铁矿待裁）；「采集中」菱形图标是转圈高光动画，只框中间白镐、阈值 0.7。
 10. **模板集只编译一次。** 93 张、两档 shrink，`gatherRunner.ts` 按模板目录缓存；
     改了模板库调 `invalidateGatherTemplates()`，**绝不能每轮重编**。
+11. **滑杆上限 ≠ 附近真有的最高等级，「搜不出卡片」≠「这个点不合适」。**（2026-09-18 真机：魔水池滑杆到 10、附近只有 8 级，
+    下限 9 一直搜不到，原来按「点不合适」在同一下限白等 4 次，截图熔断先到，魔水永远派不出去。）
+    现在：① 上限**按资源**缓存在 `state.levelByResource[type]`（旧的共用 `maxLevel` 读到即丢）；② 搜不出卡片**立刻放宽**下限、不计入
+    `occupiedRetryLimit`；③ 「下限 F 搜不到」在更低下限出卡片或本次放弃时写进 `noResultFloor`，下一轮从 F−1 起步，
+    与上限探测同寿命、探测值一变即作废。决策全在 `gather/levelMemory.ts`（纯函数），`flow.ts` 只按 `FloorStep` 执行；改它跑 `npm run check:level`。
 
 ### 唤醒时刻
 
@@ -305,6 +313,8 @@ wakeAt = freeAt + slackSeconds(60) + jitter(0~20s)     ★宁晚勿早
 | 文件 | 职责 | 边界 |
 |---|---|---|
 | `detect.ts` | `FailureTracker`：**只数数**，把事实攒成结论 | 不写盘、不发通知、不关调度 |
+| `freeze.ts` | `FreezeGuard`：卡死看门狗 —— 帧指纹比对（纹丝不动）/ 截图连续失败 → 判定 + 重启熔断 | 不截图、不重启、不发通知；帧由调度器 `onFrameCaptured` 喂进来 |
+| `freezeRecovery.ts` | `recoverFrozenInstance`：重启实例 → 等 Android → 重连 adb → 等开机 → monkey 拉起 → 等主界面 | 纯逻辑 + deps 注入；只在 `scheduler.exclusive()` 内跑；只有中止才抛（RUN_ABORTED） |
 | `kicked.ts` | 第二层顶号识别（预留） | 模板缺失 → `return null`，**静默降级，绝不抛** |
 | `center.ts` | `AlertCenter`：**只做动作**（暂停 / 落盘 / 推给面板 / 交给推送） | 不认识 Telegram，通道走结构化端口 `AlertNotifyPort` |
 | `notifier.ts` | `NotifyHub`：配置 + 三道闸 + 冷却去重 | **不认识「暂停」这件事** |
@@ -328,6 +338,12 @@ wakeAt = freeAt + slackSeconds(60) + jitter(0~20s)     ★宁晚勿早
    也补报一次 —— 少了它，设备一直坏着就会永远只在调度器里退避，连续失败计数一次都不涨。
 6. **默认值只有一份权威：`defaultAlertsConfig()`。** 本工程有过「三镜像默认值打架」的教训，
    主进程 / 渲染进程 / 离线自检一律 import 它，任何地方都不许再写 `600` / `2` 这类字面量。
+7. **卡死 ≠ 掉线：画面纹丝不动 / 截图一直超时、但驱动说实例还在运行 → 先重启，不暂停**（README 7.9）。
+   两条触发路都在调度器的**实例锁内**：健康探针（`onHealthProbe` / `onHealthProbeFailed`，完整阈值 `freezeMinutes`）
+   与「连续采样失败、马上要按掉线暂停」（`onSampleResult` 现在是异步的、被调度器 await；降档门槛）。
+   `tryFreezeRecovery()`（index.ts）里用 `scheduler.exclusive()` 重入放行，**绝不能**在里面调 `setAuto(true)`。
+   重启命令一下发就 `noteRestart()` 计数（失败的重启更该计），窗口内超过 `freezeRestartLimit` 次 → 转 `deviceOffline` 暂停。
+   恢复流程要接 AbortSignal（自动调度关掉 / 面板退出 `freezeShutdown.abort()`），否则 `scheduler.stop()` 会等它跑完。
 
 ### 落盘
 

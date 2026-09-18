@@ -70,6 +70,8 @@ export const ALERT_TYPES = [
   'consecutiveFailures',
   /** 模拟器或游戏进程掉线：实例不在 running / adb 连不上 / 前台包名长期不是游戏 */
   'deviceOffline',
+  /** 模拟器卡死（画面长时间纹丝不动 / 截图一直超时但进程还在）→ 已自动重启并拉起游戏。警告级，不暂停 */
+  'emulatorFrozen',
   /** 采集因体力、兵力、队列长期无法派出（不是坏状态，只是干不了活） */
   'dispatchStalled',
   /** 实例已恢复（人工点「恢复」或自愈成功）。信息级，用来给用户一个闭环 */
@@ -168,8 +170,23 @@ export const ALERT_SPECS = {
     notifyByDefault: true,
     summary:
       'MuMu 实例不在运行状态、adb 连不上，或前台包名长期不是万龙觉醒且拉不起来。' +
-      '这时候任何点击都会落到别的应用上。',
+      '这时候任何点击都会落到别的应用上。' +
+      '（画面纹丝不动被判定为「卡死」时会先自动重启模拟器；重启失败或短时间内反复卡死才会走到这里。）',
     advice: '已暂停该实例的自动调度。请确认模拟器是否被关掉或崩溃，重开实例并把游戏拉起来后点「恢复」。'
+  },
+  emulatorFrozen: {
+    type: 'emulatorFrozen',
+    title: '模拟器卡死已自动重启',
+    severity: 'warning',
+    pauses: false,
+    notifyByDefault: true,
+    summary:
+      '画面长时间纹丝不动（连续多张截图一模一样）或截图一直超时，但模拟器进程还在 —— 判定为卡死。' +
+      '面板会自动重启该实例、重新连接 adb、用 monkey 拉起游戏并等主界面出来，然后继续自动调度。' +
+      '重启失败、或一小时内反复卡死超过次数上限，才会转成「模拟器或游戏掉线」并暂停。',
+    advice:
+      '无需处理，自动调度会自己接着跑。如果同一个实例频繁卡死，检查一下模拟器的 CPU/内存分配、显卡驱动，' +
+      '或把「多久不动判卡死」调大一些。'
   },
   dispatchStalled: {
     type: 'dispatchStalled',
@@ -652,6 +669,24 @@ export interface AlertDetectConfig {
    * ★ 打开也不会报错：模板不存在时静默降级到第一层。默认 true。
    */
   kickedProbeEnabled: boolean
+  /**
+   * 卡死自动重启总开关。默认 true。
+   * 关掉之后卡死只会按原来的「连续采样失败 → 掉线暂停」处理，不会去重启模拟器。
+   */
+  freezeRestartEnabled: boolean
+  /**
+   * 画面连续多少分钟纹丝不动判定为卡死（健康探针默认每 3 分钟截一帧，至少要跨两帧）。默认 5，范围 2~60。
+   * 只比对像素：卡死时每张截图都是同一块缓冲区的拷贝，一个点都不会变；活着的游戏世界地图上水面、
+   * 倒计时、行军队伍随时在动，几分钟内不可能一模一样。
+   */
+  freezeMinutes: number
+  /**
+   * 同一实例在 freezeRestartWindowMin 分钟内最多自动重启几次；超过就不再重启，改判「模拟器或游戏掉线」暂停。
+   * 默认 3，范围 1~10。这是防止「重启 → 又卡 → 再重启」无限循环的熔断。
+   */
+  freezeRestartLimit: number
+  /** 上一条的统计窗口（分钟）。默认 60，范围 10~1440。 */
+  freezeRestartWindowMin: number
 }
 
 export interface AlertsConfig {
@@ -683,7 +718,11 @@ export function defaultAlertsConfig(): AlertsConfig {
       recoveryFailThreshold: 2,
       sampleFailThreshold: 3,
       stalledMinutes: 120,
-      kickedProbeEnabled: true
+      kickedProbeEnabled: true,
+      freezeRestartEnabled: true,
+      freezeMinutes: 5,
+      freezeRestartLimit: 3,
+      freezeRestartWindowMin: 60
     },
     telegram: {
       enabled: false,
@@ -738,7 +777,15 @@ export function normalizeAlertsConfig(raw: unknown): AlertsConfig {
 
   const subs = Array.isArray(t.subscribedTypes)
     ? (t.subscribedTypes as unknown[]).filter(isAlertType)
-    : base.telegram.subscribedTypes
+    : [...base.telegram.subscribedTypes]
+  // ★ 一次性迁移：老版本的 alerts.json 里没有 freezeRestartEnabled 这个键，说明它是在
+  //   「模拟器卡死已自动重启」这种事件出现之前存下来的 —— 订阅列表里不含新事件不是用户取消了勾选，
+  //   而是当时根本没有这一项。按新事件的默认订阅补上；面板保存过一次之后键就存在了，不会再补。
+  if (Array.isArray(t.subscribedTypes) && d.freezeRestartEnabled === undefined) {
+    for (const x of SUBSCRIBABLE_ALERT_TYPES) {
+      if (ALERT_SPECS[x].notifyByDefault && !subs.includes(x)) subs.push(x)
+    }
+  }
 
   return {
     version: 1,
@@ -756,7 +803,15 @@ export function normalizeAlertsConfig(raw: unknown): AlertsConfig {
         20
       ),
       stalledMinutes: clamp(numOr(d.stalledMinutes, base.detect.stalledMinutes), 5, 1440),
-      kickedProbeEnabled: boolOr(d.kickedProbeEnabled, base.detect.kickedProbeEnabled)
+      kickedProbeEnabled: boolOr(d.kickedProbeEnabled, base.detect.kickedProbeEnabled),
+      freezeRestartEnabled: boolOr(d.freezeRestartEnabled, base.detect.freezeRestartEnabled),
+      freezeMinutes: clamp(numOr(d.freezeMinutes, base.detect.freezeMinutes), 2, 60),
+      freezeRestartLimit: clamp(numOr(d.freezeRestartLimit, base.detect.freezeRestartLimit), 1, 10),
+      freezeRestartWindowMin: clamp(
+        numOr(d.freezeRestartWindowMin, base.detect.freezeRestartWindowMin),
+        10,
+        1440
+      )
     },
     telegram: {
       enabled: boolOr(t.enabled, base.telegram.enabled),

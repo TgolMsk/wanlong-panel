@@ -14,12 +14,12 @@ import { AppError } from '@shared/errors'
 import type { Point } from '@shared/vision'
 import { parseLevel } from '../vision/digits'
 import {
-  canRelaxFloor,
   computeSearchFloor,
   type GatherResourceType,
   type LevelPolicy,
   RESOURCE_LABEL
 } from './config'
+import { relaxFloor } from './levelMemory'
 import {
   CATEGORY_BAR_Y,
   CATEGORY_TAP_X,
@@ -283,7 +283,8 @@ export function initialSearchFloor(policy: LevelPolicy, maxLevel: number): numbe
 }
 
 /**
- * 放宽下限（搜不到可用点时）。
+ * 放宽下限（搜不到可用点时）。实现搬到了 levelMemory.ts（与「搜不到 / 点不合适」的状态机放在一起），
+ * 这里保留同名导出给旧调用方（离线干跑脚本）。
  * ★ 语义是「放宽下限以匹配更多候选点」，**不是**「退而求其次采低级点」——
  *   放宽后游戏仍然会优先返回高等级的点。
  * @returns 新的下限；已经放宽到底（或策略不允许放宽）时返回 null
@@ -293,8 +294,5 @@ export function relaxSearchFloor(
   current: number,
   step: number
 ): number | null {
-  if (!canRelaxFloor(policy)) return null
-  const next = current - Math.max(1, step)
-  if (next < policy.minLevel) return null
-  return next
+  return relaxFloor(policy, current, step)
 }

@@ -99,9 +99,27 @@ export interface SchedulerDeps {
    * 异常检测模块用它累计「连续采样失败」→ 判定模拟器或游戏掉线。
    * ★ 只通报**真的去读了面板**的那些：被采样节流跳过、被「实例上有脚本在跑」让路的，
    *   都不算失败，不会走到这里。
-   * ★ 实现方不得抛异常（真抛了这里也会吞掉），更不得在里面 await 调度器自己的方法。
+   * ★ 实现方不得抛异常（真抛了这里也会吞掉）。可以返回 Promise：调度器会在**实例锁内** await 它
+   *   （卡死看门狗要在「按掉线暂停」之前先就地重启模拟器，重启期间不能有别的操作插进来），
+   *   但**不得**在里面 await 调度器自己的方法（setAuto(true) / sampleNow 会死锁）；
+   *   需要独占实例时用 exclusive()（锁内调用会重入放行）。ctx.signal 是自动调度的中止信号，长操作要接它。
    */
-  onSampleResult?(instanceIndex: number, ok: boolean, message: string | null): void
+  onSampleResult?(
+    instanceIndex: number,
+    ok: boolean,
+    message: string | null,
+    ctx?: { signal?: AbortSignal }
+  ): void | Promise<void>
+  /**
+   * 每截到一帧就通报（采样与健康探针的每一张截图）。卡死看门狗用它比对画面有没有变化。
+   * 同步回调，在实例锁内被调用：实现方不得抛异常（真抛了也会吞掉），不得 await 调度器方法。
+   */
+  onFrameCaptured?(instanceIndex: number, raw: RawFrame): void
+  /**
+   * 截图失败（adb 超时 / 设备离线，也包括取不到设备）的通报。卡死看门狗据此累计「adb 挂住」的证据。
+   * 同步回调，纪律同上。自动调度被中止导致的失败不通报。
+   */
+  onCaptureFailed?(instanceIndex: number, error: AppError): void
   /**
    * 采样器认不出界面时，把那一帧交出来跑探针（顶号弹窗等）。
    * 返回 true = 探针命中并已接管（告警中心暂停实例），采样器就不再按 BACK 试探。
@@ -114,12 +132,22 @@ export interface SchedulerDeps {
   ): Promise<boolean | 'recovered' | 'updated' | void>
   /**
    * 健康探针：到点截一帧（不开面板）交给上层，附带前台包名与游戏进程存活情况。
-   * 同样在实例锁内，同样不得 await 调度器方法。
+   * 同样在实例锁内，同样不得 await 调度器方法（需要独占实例用 exclusive()，锁内会重入放行）。
+   * ctx.signal 是自动调度的中止信号，卡死重启这类长操作要接它。
    */
   onHealthProbe?(
     instanceIndex: number,
     raw: RawFrame,
-    ctx: { foreground: string | null; running: boolean | null }
+    ctx: { foreground: string | null; running: boolean | null; signal?: AbortSignal }
+  ): Promise<void>
+  /**
+   * 健康探针连帧都截不到（取不到设备 / 截图超时）时的通报，同样在实例锁内被 await。
+   * 卡死看门狗据此判定「adb 已挂住」并可就地重启模拟器。抛错只记日志。
+   */
+  onHealthProbeFailed?(
+    instanceIndex: number,
+    error: AppError,
+    ctx: { signal?: AbortSignal }
   ): Promise<void>
   /** 健康探针要盯的游戏包名；不给就不做进程存活判断。 */
   gamePackage?(): string
@@ -491,8 +519,33 @@ class SchedulerImpl {
     }
     try {
       await this.withLock(instanceIndex, async () => {
-        const dev = await autoOperation(() => deps.resolveDevice(instanceIndex))
-        const raw = await autoOperation(() => deps.adb.capture(dev.serial))
+        let dev: DeviceInfo
+        let raw: RawFrame
+        try {
+          dev = await autoOperation(() => deps.resolveDevice(instanceIndex))
+          raw = await this.captureWithHooks(instanceIndex, () =>
+            autoOperation(() => deps.adb.capture(dev.serial))
+          )
+        } catch (e) {
+          const err = AppError.from(e)
+          if (autoCtx.getStore()?.aborted || err.code === 'RUN_ABORTED') throw err
+          // 取不到设备也算一次「截不到帧」：卡死看门狗要靠它区分「adb 挂住」与「实例根本没开」。
+          this.notifyCaptureFailed(instanceIndex, err)
+          if (deps.onHealthProbeFailed) {
+            try {
+              await deps.onHealthProbeFailed(instanceIndex, err, { signal: autoCtx.getStore() })
+            } catch (e2) {
+              const err2 = AppError.from(e2)
+              if (err2.code !== 'RUN_ABORTED') {
+                this.log(
+                  'warn',
+                  `实例 ${instanceIndex} 健康探针失败通报出错（已忽略）：${err2.message}`
+                )
+              }
+            }
+          }
+          throw err
+        }
         const pkg = deps.gamePackage?.()
         let foreground: string | null = null
         let running: boolean | null = null
@@ -511,10 +564,53 @@ class SchedulerImpl {
           `实例 ${instanceIndex} 健康探针：前台=${foreground ?? '未知'} 游戏进程=${running === null ? '未知' : running ? '在' : '不在'}`
         )
         checkAuto()
-        await deps.onHealthProbe!(instanceIndex, raw, { foreground, running })
+        await deps.onHealthProbe!(instanceIndex, raw, {
+          foreground,
+          running,
+          signal: autoCtx.getStore()
+        })
       })
     } catch (e) {
       this.log('warn', `实例 ${instanceIndex} 健康探针失败：${AppError.from(e).message}`)
+    }
+  }
+
+  /**
+   * 截一帧并把结果通报给上层（卡死看门狗）：成功给帧，失败给错误。
+   * 自动调度被中止导致的失败不通报 —— 那不是设备的问题。
+   */
+  private async captureWithHooks(
+    instanceIndex: number,
+    fn: () => Promise<RawFrame>
+  ): Promise<RawFrame> {
+    let raw: RawFrame
+    try {
+      raw = await fn()
+    } catch (e) {
+      const err = AppError.from(e)
+      if (!autoCtx.getStore()?.aborted && err.code !== 'RUN_ABORTED') {
+        this.notifyCaptureFailed(instanceIndex, err)
+      }
+      throw e
+    }
+    const hook = this.deps?.onFrameCaptured
+    if (hook) {
+      try {
+        hook(instanceIndex, raw)
+      } catch (e) {
+        this.log('warn', `截图通报回调抛错（已忽略）：${AppError.from(e).message}`)
+      }
+    }
+    return raw
+  }
+
+  private notifyCaptureFailed(instanceIndex: number, err: AppError): void {
+    const hook = this.deps?.onCaptureFailed
+    if (!hook) return
+    try {
+      hook(instanceIndex, err)
+    } catch (e) {
+      this.log('warn', `截图失败通报回调抛错（已忽略）：${AppError.from(e).message}`)
     }
   }
 
@@ -553,7 +649,17 @@ class SchedulerImpl {
     this.publish(rt.state)
 
     try {
-      const dev = await autoOperation(() => deps.resolveDevice(instanceIndex))
+      let dev: DeviceInfo
+      try {
+        dev = await autoOperation(() => deps.resolveDevice(instanceIndex))
+      } catch (e) {
+        // 取不到设备也算一次「截不到帧」（卡死看门狗要靠它区分「adb 挂住」与「实例根本没开」）。
+        const err = AppError.from(e)
+        if (!autoCtx.getStore()?.aborted && err.code !== 'RUN_ABORTED') {
+          this.notifyCaptureFailed(instanceIndex, err)
+        }
+        throw e
+      }
       const { refWidth, refHeight } = deps.refSize()
       const templates = await getTemplates({
         templateSetId: this.config.templateSetId,
@@ -562,7 +668,10 @@ class SchedulerImpl {
 
       const io: SampleIo = {
         serial: dev.serial,
-        capture: () => autoOperation(() => deps.adb.capture(dev.serial)),
+        capture: () =>
+          this.captureWithHooks(instanceIndex, () =>
+            autoOperation(() => deps.adb.capture(dev.serial))
+          ),
         tapRef: async (x, y) => {
           const p = toDevice(dev, x, y)
           await autoOperation(() => deps.adb.tap(dev.serial, p.x, p.y))
@@ -620,14 +729,15 @@ class SchedulerImpl {
         err.code !== 'GAME_UPDATE_REQUIRED' &&
         err.code !== 'AI_RISK_BLOCKED'
       ) {
-        this.notifySampleResult(instanceIndex, false, err.message)
+        // ★ 在锁内 await：卡死看门狗可能要在这里就地重启模拟器（几分钟），期间不能放别的操作进来。
+        await this.notifySampleResult(instanceIndex, false, err.message)
       }
       throw err
     }
 
     this.publish(rt.state)
     await this.persist()
-    this.notifySampleResult(instanceIndex, true, null)
+    await this.notifySampleResult(instanceIndex, true, null)
     this.rearm(instanceIndex, '采样完成')
   }
 
@@ -823,12 +933,21 @@ class SchedulerImpl {
     return rt
   }
 
-  /** 把采样成败告诉异常检测模块。★ 它坏掉绝不能连累调度。 */
-  private notifySampleResult(instanceIndex: number, ok: boolean, message: string | null): void {
+  /**
+   * 把采样成败告诉异常检测模块。★ 它坏掉绝不能连累调度。
+   * 回调可以是异步的（卡死看门狗会在这里就地重启模拟器），所以在锁内 await 它；中止信号一并交出去。
+   */
+  private async notifySampleResult(
+    instanceIndex: number,
+    ok: boolean,
+    message: string | null
+  ): Promise<void> {
     try {
-      this.deps?.onSampleResult?.(instanceIndex, ok, message)
+      await this.deps?.onSampleResult?.(instanceIndex, ok, message, { signal: autoCtx.getStore() })
     } catch (e) {
-      this.log('warn', `采样结果通报失败（不影响调度）：${AppError.from(e).message}`)
+      const err = AppError.from(e)
+      if (err.code === 'RUN_ABORTED') return
+      this.log('warn', `采样结果通报失败（不影响调度）：${err.message}`)
     }
   }
 
