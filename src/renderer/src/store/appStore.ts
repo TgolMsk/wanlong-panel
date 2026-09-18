@@ -35,6 +35,8 @@ export type ViewKey =
   | 'ai'
   | 'templates'
   | 'scripts'
+  /** 任务计划：账号勾选脚本 + 运行时间（src/main/plan）。 */
+  | 'plans'
   | 'accounts'
   | 'settings'
 
@@ -50,6 +52,7 @@ const VIEW_KEYS: readonly ViewKey[] = [
   'ai',
   'templates',
   'scripts',
+  'plans',
   'accounts',
   'settings'
 ]

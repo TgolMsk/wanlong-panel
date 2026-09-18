@@ -23,6 +23,7 @@ import InstancesView from './views/InstancesView'
 import RunsView from './views/RunsView'
 import TemplateEditor from './views/TemplateEditor'
 import ScriptsView from './views/ScriptsView'
+import PlansView from './views/PlansView'
 import AccountsView from './views/AccountsView'
 import SettingsView from './views/SettingsView'
 import GatherOverviewView from './features/gather/GatherOverviewView'
@@ -51,6 +52,8 @@ function CurrentView({ view }: { view: ViewKey }): React.JSX.Element {
       return <TemplateEditor />
     case 'scripts':
       return <ScriptsView />
+    case 'plans':
+      return <PlansView />
     case 'accounts':
       return <AccountsView />
     case 'settings':

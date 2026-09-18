@@ -55,6 +55,21 @@ import { cancelAllWakes, cancelWake, getWake, listWakes, scheduleWake } from './
 import { getTemplates, invalidateTemplates } from './templates'
 import { sampleTroopPanel, type PanelSample, type SampleIo } from './troopPanel'
 
+// ── 让路给脚本 ────────────────────────────────────────────────────────────
+
+/** abort 之后再给在飞的那条链多久把实例锁放开。 */
+const ABORT_DRAIN_MS = 5_000
+/** 脚本跑完多久之后重读一次队列（画面被动过，旧状态不可信）。 */
+const RESAMPLE_AFTER_SCRIPT_MS = 15_000
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => {
+    const t = setTimeout(r, Math.max(0, ms))
+    // 不 unref 的话，让路等待期间用户关窗会被吊住。
+    t.unref?.()
+  })
+}
+
 // ── 依赖注入 ──────────────────────────────────────────────────────────────
 
 /** 调度器需要的设备能力（只要这三样，其余一概不碰）。 */
@@ -206,6 +221,12 @@ interface Runtime {
   lastHealthProbeAt?: number
   autoController?: AbortController
   autoRequest?: number
+  /**
+   * ★ 有几条脚本执行正占着这个实例（任务计划器的 suspendForScript 加的）。
+   * > 0 期间调度器不发起任何新的采样/派遣 —— 脚本优先级最高。
+   * 用计数而不是布尔，是因为「立即运行」和到点触发可能前后脚都来占。
+   */
+  scriptHolds?: number
 }
 
 class SchedulerImpl {
@@ -372,6 +393,88 @@ class SchedulerImpl {
       this.rearm(instanceIndex, `首次采样失败：${err.message}`, 1)
     }
     return cloneState(rt.state)
+  }
+
+  /**
+   * ★ 为脚本让路（任务计划器在启动执行前调用）。返回「放回去」的函数。
+   *
+   * 脚本优先级最高，但「最高」不等于「莽撞」，所以是**先礼后兵**：
+   *   ① 礼：取消排期，等 graceMs 让在飞的采样/派遣链自然收尾（多数情况几百毫秒就让开了）；
+   *   ② 兵：还占着就 abort 掉那条链（它会在下一个 checkAuto 处退出并释放实例锁），
+   *      再等它真的把锁放开，最多 ABORT_DRAIN_MS。
+   *
+   * 释放时不直接恢复原排期，而是安排一次近期的「重读队列校验」——
+   * 脚本期间画面被动过（甚至可能派过兵），调度器手里的旧状态不再可信。
+   *
+   * ★ 本方法**不抛异常**：让路失败最坏就是编排器那边报 CONCURRENCY_LIMIT，
+   *   计划器会自己退避重试，不该因为让路本身把这一轮任务判死。
+   */
+  async suspendForScript(
+    instanceIndex: number,
+    graceMs: number,
+    reason: string
+  ): Promise<() => void> {
+    let rt: Runtime
+    try {
+      rt = this.rt(instanceIndex)
+    } catch {
+      return () => undefined
+    }
+    rt.scriptHolds = (rt.scriptHolds ?? 0) + 1
+    let released = false
+    const release = (): void => {
+      if (released) return
+      released = true
+      rt.scriptHolds = Math.max(0, (rt.scriptHolds ?? 1) - 1)
+      if (rt.scriptHolds > 0 || this.stopping || !rt.state.auto) return
+      // 上一条链是被 abort 掉的，控制器已经是 aborted 状态，必须换一个新的，
+      // 否则下一次 onWake 一进 checkAuto 就立刻抛 RUN_ABORTED，自动调度静默死掉。
+      rt.autoController = new AbortController()
+      const dueAt = Date.now() + RESAMPLE_AFTER_SCRIPT_MS
+      const wakeReason = '脚本执行结束，重读队列校验'
+      rt.state.nextWakeAt = dueAt
+      rt.state.nextWakeReason = wakeReason
+      rt.state.backoffStep = 0
+      scheduleWake({ key: instanceIndex, dueAt, reason: wakeReason, backoffStep: 0 }, (task) => {
+        void this.onWake(task.key, task.reason, task.backoffStep)
+      })
+      this.publish(rt.state)
+      this.log(
+        'info',
+        `实例 ${instanceIndex} 的自动调度已恢复，${Math.round(RESAMPLE_AFTER_SCRIPT_MS / 1000)}s 后重读队列。`
+      )
+    }
+
+    try {
+      if (!rt.state.auto) return release
+      cancelWake(instanceIndex)
+      rt.state.nextWakeAt = null
+      rt.state.nextWakeReason = `为脚本让路：${reason}`
+      this.publish(rt.state)
+
+      const drain = (): Promise<void> =>
+        rt.lock.then(
+          () => undefined,
+          () => undefined
+        )
+      if (graceMs > 0 && rt.state.operating) {
+        await Promise.race([drain(), sleep(graceMs)])
+      }
+      if (rt.state.operating) {
+        this.log(
+          'warn',
+          `实例 ${instanceIndex} 上的自动调度 ${Math.round(graceMs / 1000)}s 内没让开，按脚本优先中断它（${reason}）。`
+        )
+        rt.autoController?.abort()
+        await Promise.race([drain(), sleep(ABORT_DRAIN_MS)])
+      }
+    } catch (e) {
+      this.log(
+        'warn',
+        `实例 ${instanceIndex} 让路时出错（按已让路继续）：${AppError.from(e).message}`
+      )
+    }
+    return release
   }
 
   /**
@@ -624,6 +727,15 @@ class SchedulerImpl {
     const rt = this.rt(instanceIndex)
 
     // ① 执行器占用检查。跨进程没有共享的 adb 队列，同时驱动一定出事。
+    //    scriptHolds 覆盖「计划器已经让路、但 worker 还没起来」那几百毫秒的空窗：
+    //    此时 busyRunIdOf 还是 null，光看它会让采样正好挤进去。
+    if ((rt.scriptHolds ?? 0) > 0) {
+      throw new AppError(
+        'CONCURRENCY_LIMIT',
+        `实例 ${instanceIndex} 正在为脚本让路，调度器不去动它。等脚本结束后会自动重试。`,
+        { instanceIndex }
+      )
+    }
     const busy = deps.busyRunIdOf(instanceIndex)
     if (busy) {
       throw new AppError(
@@ -828,6 +940,12 @@ class SchedulerImpl {
   private async onWake(instanceIndex: number, reason: string, prevStep: number): Promise<void> {
     const rt = this.runtimes.get(instanceIndex)
     if (!rt || !rt.state.auto || this.stopping) return
+    // ★ 脚本优先：有脚本占着这个实例时连唤醒都不做。
+    //   不在这里补排期 —— suspendForScript 的 release 会安排「脚本跑完重读队列」那一次。
+    if ((rt.scriptHolds ?? 0) > 0) {
+      this.log('debug', `实例 ${instanceIndex} 上有脚本在跑，本次唤醒跳过（等脚本结束后重排）。`)
+      return
+    }
     const controller = (rt.autoController ??= new AbortController())
     try {
       await autoCtx.run(controller.signal, () =>

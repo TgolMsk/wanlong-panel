@@ -114,6 +114,43 @@ export type AdbLinkState = 'disconnected' | 'connecting' | 'connected' | 'unauth
  *   · 雷电：count 次 `ldconsole add`，type 忽略，settings 交给 `ldconsole modify`
  *     （支持的键见 src/main/mumu/ldplayer/index.ts 的 LD_MODIFY_KEYS，例如 { resolution: "2560,1440,360", cpu: 4, memory: 4096 }）
  */
+/**
+ * 模拟器窗口的摆放动作（面板「更多 → 窗口」用）。
+ *
+ * ★ 与自动化完全无关：Android 是按实例配置的分辨率**离屏渲染**的，窗口只是个显示器。
+ *   2026-09-18 在 MuMu 6.6.4 实测过三种状态（正常 / 缩到 718×404 / 完全隐藏），
+ *   `screencap` 输出一律是 2560×1440 且画面统计值一致 —— 所以缩小或隐藏窗口
+ *   **不会**影响截图、模板匹配和坐标换算，可以放心用。
+ *
+ * ★ 也别指望它省 CPU：同一场景实测 MuMu 全部进程 5.2% → 5.1%（20 逻辑核归一化），
+ *   隐藏窗口基本没有收益。真要省资源应该去开 MuMu 自己的「后台降帧」
+ *   （dynamic_adjust_frame_rate / dynamic_low_frame_rate_limit）。
+ *   这个功能解决的是**屏幕被 16 个窗口占满**，不是性能。
+ */
+export type WindowAction =
+  /** 完全隐藏窗口，实例照常跑。 */
+  | 'hide'
+  /** 重新显示窗口。 */
+  | 'show'
+  /** 缩到屏幕角落的小窗（会先确保窗口是显示的）。 */
+  | 'corner'
+
+export const WINDOW_ACTION_TEXT: Record<WindowAction, string> = {
+  hide: '隐藏窗口',
+  show: '显示窗口',
+  corner: '缩到角落'
+}
+
+/**
+ * 驱动层收到的窗口指令。
+ * 'corner' 在主进程就被换算成了具体的 layout —— 屏幕尺寸只有 Electron 知道，
+ * 驱动层是纯 Node，不该也拿不到这个信息。
+ */
+export type DriverWindowCommand =
+  | { kind: 'hide' }
+  | { kind: 'show' }
+  | { kind: 'layout'; x: number; y: number; width: number; height: number }
+
 export interface CreateInstanceOptions {
   /** 未指定时：已设基础实例则克隆，否则空白新建。 */
   source?: 'base' | 'blank'

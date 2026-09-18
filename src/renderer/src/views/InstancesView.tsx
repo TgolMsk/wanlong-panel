@@ -39,6 +39,8 @@ import {
   DeleteOutlined,
   DisconnectOutlined,
   DownOutlined,
+  ExpandOutlined,
+  EyeInvisibleOutlined,
   EyeOutlined,
   LinkOutlined,
   PauseCircleOutlined,
@@ -48,10 +50,17 @@ import {
   ReloadOutlined,
   SearchOutlined,
   SettingOutlined,
+  ShrinkOutlined,
   SlidersOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons'
-import type { BaseInstanceSelection, CreateInstanceOptions, MumuInstance } from '@shared/domain'
+import type {
+  BaseInstanceSelection,
+  CreateInstanceOptions,
+  MumuInstance,
+  WindowAction
+} from '@shared/domain'
+import { WINDOW_ACTION_TEXT } from '@shared/domain'
 import { INSTANCE_DISK_COST_BYTES } from '@shared/constants'
 import {
   accountOfInstance,
@@ -203,6 +212,18 @@ export default function InstancesView(): React.JSX.Element {
     }
   }
 
+  /** 当前驱动支不支持摆窗口（雷电与 macOS 版 MuMu Pro 不支持）。探测失败按不支持处理。 */
+  const [windowSupported, setWindowSupported] = useState(false)
+  useEffect(() => {
+    let alive = true
+    void tryCall('instance:windowSupported').then((v) => {
+      if (alive && v !== undefined) setWindowSupported(v)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
   const upCount = useMemo(() => countRunningInstances(instances), [instances])
   const limit = settings.maxConcurrentInstances
   const atLimit = upCount >= limit
@@ -247,6 +268,33 @@ export default function InstancesView(): React.JSX.Element {
     } finally {
       mark(key, false)
     }
+  }
+
+  /**
+   * 窗口摆放是**纯显示**操作：不碰 adb、不动实例状态，所以不用 refreshInstances，
+   * 也不该把整行按钮转圈锁住。失败时 call() 已经弹过中文错误。
+   */
+  const setWindow = async (index: number, action: WindowAction): Promise<void> => {
+    const r = await tryCall('instance:window', index, action)
+    if (r !== undefined) toast().success(`实例 ${index} 已${WINDOW_ACTION_TEXT[action]}`)
+  }
+
+  /** 对当前筛选出来的、已开机的实例批量摆窗口。没开机的没有窗口，直接跳过。 */
+  const setWindowBatch = async (action: WindowAction): Promise<void> => {
+    const targets = visibleInstances.filter(isInstanceUp)
+    if (targets.length === 0) {
+      toast().warning('当前列表里没有已开机的实例，没有窗口可以摆。')
+      return
+    }
+    let ok = 0
+    for (const t of targets) {
+      const r = await tryCall('instance:window', t.index, action)
+      if (r !== undefined) ok += 1
+    }
+    toast().success(
+      `已对 ${ok} / ${targets.length} 个实例${WINDOW_ACTION_TEXT[action]}` +
+        (ok < targets.length ? '（失败的原因见上面的提示）' : '')
+    )
   }
 
   const doRefresh = async (): Promise<void> => {
@@ -672,6 +720,18 @@ export default function InstancesView(): React.JSX.Element {
                   { key: 'gatherConfig', icon: <SlidersOutlined />, label: '采集配置' },
                   { key: 'restart', icon: <ReloadOutlined />, label: '重启实例', disabled: !up },
                   {
+                    key: 'window',
+                    icon: <ExpandOutlined />,
+                    label: '窗口',
+                    // 驱动不支持（雷电 / macOS）或实例没开机时整组灰掉，而不是点了才报错。
+                    disabled: !windowSupported || !up,
+                    children: [
+                      { key: 'window:corner', label: WINDOW_ACTION_TEXT.corner },
+                      { key: 'window:hide', label: WINDOW_ACTION_TEXT.hide },
+                      { key: 'window:show', label: WINDOW_ACTION_TEXT.show }
+                    ]
+                  },
+                  {
                     key: 'detach',
                     icon: <DisconnectOutlined />,
                     label: '断开连接',
@@ -695,6 +755,10 @@ export default function InstancesView(): React.JSX.Element {
                   { key: 'delete', icon: <DeleteOutlined />, label: '删除实例', danger: true }
                 ],
                 onClick: ({ key }) => {
+                  if (key.startsWith('window:')) {
+                    void setWindow(r.index, key.slice('window:'.length) as WindowAction)
+                    return
+                  }
                   if (key === 'login') setLoginTargets([r.index])
                   if (key === 'gatherConfig') openGatherConfig(r.index)
                   if (key === 'restart') {
@@ -805,6 +869,29 @@ export default function InstancesView(): React.JSX.Element {
                 批量采集
               </Button>
             </Dropdown>
+            {windowSupported && (
+              <Dropdown
+                trigger={['click']}
+                disabled={instances.length === 0}
+                menu={{
+                  items: [
+                    { key: 'corner', icon: <ShrinkOutlined />, label: '全部缩到角落' },
+                    { key: 'hide', icon: <EyeInvisibleOutlined />, label: '全部隐藏窗口' },
+                    { type: 'divider' },
+                    { key: 'show', icon: <ExpandOutlined />, label: '全部显示窗口' }
+                  ],
+                  onClick: ({ key }) => void setWindowBatch(key as WindowAction)
+                }}
+              >
+                <Button
+                  icon={<DownOutlined />}
+                  iconPosition="end"
+                  title="只作用于当前列表里筛选出来的、已开机的实例。窗口位置与自动化无关：Android 是离屏渲染的，缩小或隐藏都不影响截图和模板匹配。"
+                >
+                  批量窗口
+                </Button>
+              </Dropdown>
+            )}
             <Button icon={<ReloadOutlined />} loading={refreshing} onClick={doRefresh}>
               刷新
             </Button>

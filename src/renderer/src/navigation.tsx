@@ -41,9 +41,10 @@ export const NAVIGATION: NavigationSection[] = [
   {
     key: 'activity',
     label: '运行记录',
-    description: '查看正在执行的任务与每日采集统计',
+    description: '排定时任务、查看正在执行的任务与每日采集统计',
     icon: <ThunderboltOutlined />,
     views: [
+      { key: 'plans', label: '任务计划' },
       { key: 'runs', label: '执行监控' },
       { key: 'stats', label: '数据统计' }
     ]

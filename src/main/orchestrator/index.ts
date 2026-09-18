@@ -17,7 +17,7 @@ import { makeId } from '@shared/defaults'
 import { AppError } from '@shared/errors'
 import type { Account, AppSettings, ResolvedPaths } from '@shared/domain'
 import type { RunHandle, RunSnapshot, RunStatus, ScriptDef, StartRunRequest } from '@shared/script'
-import type { WorkerAttachPayload, WorkerToMain } from '@shared/worker'
+import type { AiAssistResult, WorkerAttachPayload, WorkerToMain } from '@shared/worker'
 import { appendLogs } from '../store/logs'
 import { saveShot } from '../store/shots'
 import { RunWorker, STOP_GRACE_MS } from './pool'
@@ -35,6 +35,26 @@ export interface RunDeps {
   resolveSerial: (instanceIndex: number) => Promise<string>
   /** 取账号信息，用于日志归档与参数覆盖。 */
   loadAccount?: (accountId: string) => Promise<Account | null>
+  /**
+   * ★ AI 顾问端口：脚本某一步重试耗尽时，worker 会喊一声，由主进程去看一眼当前画面
+   * （多半是活动弹窗挡路）并尝试处理掉。不接 = 脚本执行期间没有 AI 兜底，行为与从前完全一致。
+   *
+   * 实现方在**同一个 serial** 上自己截图自己点；worker 此刻停在 await 上不动手，
+   * 所以不会两边同时驱动同一个模拟器。实现方不得抛异常（真抛了这里也会兜住）。
+   */
+  aiAssist?: (req: AiAssistRequest) => Promise<AiAssistResult>
+}
+
+/** 一次 AI 求助的上下文（编排器把 worker 的消息原样转给主进程的实现）。 */
+export interface AiAssistRequest {
+  runId: string
+  instanceIndex: number
+  scriptId: string
+  /** 脚本的模板集 id（自学模板往这里存）。没有为 null。 */
+  templateSetId: string | null
+  stepId: string | null
+  reason: string
+  expectTemplateIds: string[]
 }
 
 export interface Orchestrator {
@@ -64,6 +84,10 @@ interface RunEntry {
   worker: RunWorker
   snapshot: RunSnapshot
   paths: ResolvedPaths
+  /** 启动时那一份依赖，AI 求助要用（worker 的消息是异步回来的，那时 start 早返回了）。 */
+  deps: RunDeps
+  /** 脚本的模板集 id，AI 自学模板时要知道往哪个集合里存。 */
+  templateSetId: string | null
   finished: boolean
   exited: Promise<void>
   resolveExited: () => void
@@ -224,6 +248,8 @@ class OrchestratorImpl implements Orchestrator {
         worker,
         snapshot,
         paths,
+        deps,
+        templateSetId: script.templateSetId ?? null,
         finished: false,
         exited,
         resolveExited,
@@ -332,6 +358,10 @@ class OrchestratorImpl implements Orchestrator {
         e.worker.requestShutdown()
         break
 
+      case 'aiConsult':
+        void this.onAiConsult(e, m)
+        break
+
       case 'error':
         console.error(`[orchestrator] 执行器报错（run=${runId}）：${m.error.message}`)
         if (!e.finished) {
@@ -344,6 +374,44 @@ class OrchestratorImpl implements Orchestrator {
         // ready / attached / detectResult 由 waitFor 处理，这里不用管。
         break
     }
+  }
+
+  /**
+   * worker 卡住了，转给主进程的 AI 顾问。
+   *
+   * ★ 无论成败都**必须**回一条 aiResult：worker 那边正停在 await 上等，
+   *   漏回一条就是让脚本干等到 3 分钟超时，白白浪费一次执行窗口。
+   */
+  private async onAiConsult(
+    e: RunEntry,
+    m: Extract<WorkerToMain, { type: 'aiConsult' }>
+  ): Promise<void> {
+    let result: AiAssistResult
+    const assist = e.deps.aiAssist
+    if (!assist) {
+      result = { handled: false, message: 'AI 顾问没有接入执行链路，本次跳过。' }
+    } else {
+      try {
+        result = await assist({
+          runId: m.runId,
+          instanceIndex: m.instanceIndex,
+          scriptId: e.handle.scriptId,
+          templateSetId: e.templateSetId,
+          stepId: m.stepId,
+          reason: m.reason,
+          expectTemplateIds: m.expectTemplateIds
+        })
+      } catch (err) {
+        const ae = AppError.from(err)
+        result = {
+          handled: false,
+          message: `AI 顾问出错，按未处理继续：${ae.message}`,
+          requiresAttention: ae.code === 'AI_RISK_BLOCKED' || ae.code === 'GAME_UPDATE_REQUIRED'
+        }
+      }
+    }
+    if (e.workerExited || e.finished) return
+    e.worker.post({ type: 'aiResult', requestId: m.requestId, result })
   }
 
   private onWorkerExit(runId: string, code: number): void {

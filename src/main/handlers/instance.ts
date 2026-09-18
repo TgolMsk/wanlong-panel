@@ -22,6 +22,11 @@ export function registerInstanceHandlers(deps: MainDeps): void {
 
   handle(CH.instanceRefresh, () => deps.mumu.refresh())
 
+  // 窗口摆放是**纯显示**操作：不碰 adb、不动实例生命周期，所以不走 withInstance 的互斥，
+  // 也不需要刷新列表（窗口位置不在 MumuInstance 里）。
+  handle(CH.instanceWindowSupported, () => deps.mumu.windowSupported())
+  handle(CH.instanceWindow, (index, action) => deps.mumu.window(index, action))
+
   handle(CH.instanceOpen, (index) =>
     provisioner.withInstance(index, '启动实例', async () => {
       await deps.mumu.open(index)

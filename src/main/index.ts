@@ -12,12 +12,12 @@
  */
 
 import { join } from 'node:path'
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, screen, shell } from 'electron'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 
 import { DATA_DIRS, GLOBAL_ADB_CONCURRENCY } from '@shared/constants'
 import { AppError } from '@shared/errors'
-import type { AppSettings, ResolvedPaths } from '@shared/domain'
+import type { AppSettings, ResolvedPaths, WindowAction } from '@shared/domain'
 import type { LogLevel, RunSnapshot, RunStatus } from '@shared/script'
 
 import { emit, resetIpc } from '@main/ipc'
@@ -108,16 +108,28 @@ import {
   saveScript,
   validateScript
 } from '@main/store/scripts'
-import { queryLogs } from '@main/store/logs'
+import { appendAppLog, queryLogs } from '@main/store/logs'
 import { readShot, saveShot } from '@main/store/shots'
 
 // ── 模块 d：执行编排 ──────────────────────────────────────────────────────
 import { getOrchestrator } from '@main/orchestrator/index'
-import type { RunDeps } from '@main/orchestrator/index'
+import type { AiAssistRequest, RunDeps } from '@main/orchestrator/index'
 
 // ── ETA 调度：队列状态采样 + 定时唤醒 ─────────────────────────────────────
+import { instanceAccess } from '@main/instanceAccess'
+import { cornerWindowRect } from '@main/mumu/window'
+// ── 应用内更新：查 GitHub Release → 下载 → 退出安装 ───────────────────────
+import { getUpdateCenter } from '@main/update/index'
+import { createElectronUpdater, releasePageUrl } from '@main/update/electron'
+import { emitUpdate, handleUpdate, resetUpdateIpc } from '@main/update/ipc'
+import { UPDATE_CH } from '@shared/update'
 import { getScheduler } from '@main/scheduler/index'
 import type { SchedulerDeps } from '@main/scheduler/index'
+
+// ── 任务计划：账号勾选脚本 + 运行时间 → 到点排队执行（脚本优先级最高）──────
+import { getPlanRunner } from '@main/plan/index'
+import type { PlanDeps } from '@main/plan/index'
+import { resetPlanIpc } from '@main/plan/ipc'
 
 // ── 自动采集：队列有空位时的派遣流程 ──────────────────────────────────────
 import {
@@ -133,6 +145,7 @@ import {
 import {
   aiRecoverUnknownScreen,
   getAiAdvisor,
+  isClosePopupTemplateId,
   type RecoverIo,
   type RecoverContext
 } from '@main/ai/index'
@@ -146,7 +159,8 @@ import {
 import { invalidateTemplates as invalidateSchedulerTemplates } from '@main/scheduler/templates'
 
 // ── 异常检测 + 自动暂停 + 告警推送 ────────────────────────────────────────
-import type { RawFrame } from '@shared/vision'
+import type { PreparedTemplate, RawFrame } from '@shared/vision'
+import type { AiAssistResult } from '@shared/worker'
 import { pausesInstance, makeAlertEvent } from '@shared/alerts'
 import { isRunning, launchViaMonkey } from '@main/adb/apps'
 import { TelegramBot } from '@main/alerts/telegramBot'
@@ -191,7 +205,36 @@ const mumu: MumuPort = {
   clone: (index) => getEmulatorDriver().clone(index),
   remove: (index) => getEmulatorDriver().remove(index),
   config: (index, settings) => getEmulatorDriver().config(index, settings),
+  windowSupported: () => typeof getEmulatorDriver().setWindow === 'function',
+  window: (index, action) => setInstanceWindow(index, action),
   patch: (index, overlay) => registry.patch(index, overlay)
+}
+
+// ── 模拟器窗口摆放 ───────────────────────────────────────────────────────
+//
+// ★ 这是**纯显示**的功能：Android 离屏渲染，隐藏或缩小窗口之后 screencap 照常是实例配置的
+//   分辨率（2026-09-18 在 MuMu 6.6.4 实测过三种状态，画面统计值一致）。所以它不会影响
+//   截图、模板匹配、坐标换算，也**不会**省 CPU（实测 5.2% → 5.1%）——它解决的是屏幕被占满。
+
+/**
+ * 把「隐藏 / 显示 / 缩到角落」翻成驱动认识的指令。
+ * 'corner' 的坐标在这里算 —— 屏幕尺寸只有 Electron 知道，驱动层是纯 Node
+ * （几何本身在 mumu/window.ts，纯函数，有离线自检）。
+ */
+async function setInstanceWindow(index: number, action: WindowAction): Promise<void> {
+  const driver = getEmulatorDriver()
+  if (!driver.setWindow) {
+    throw new AppError(
+      'MUMU_API_UNSUPPORTED',
+      `${driver.label}没有摆放窗口的命令，这个功能目前只有 Windows 版 MuMu 支持。`
+    )
+  }
+  if (action === 'hide') return driver.setWindow(index, { kind: 'hide' })
+  if (action === 'show') return driver.setWindow(index, { kind: 'show' })
+
+  // 用 workArea 而不是 bounds：避开任务栏。
+  const rect = cornerWindowRect(index, screen.getPrimaryDisplay().workArea)
+  return driver.setWindow(index, { kind: 'layout', ...rect })
 }
 
 const adb: AdbPort = {
@@ -321,7 +364,9 @@ function runDeps(): RunDeps {
       return (await ensureDevice(deps, instanceIndex)).serial
     },
     loadAccount: async (accountId) =>
-      (await accounts.list()).find((a) => a.id === accountId) ?? null
+      (await accounts.list()).find((a) => a.id === accountId) ?? null,
+    // ★ 脚本卡住时的 AI 兜底。没开 AI / 计划里关掉了，函数内部会自己判断并原样返回「未处理」。
+    aiAssist: (req) => aiAssistForRun(req)
   }
 }
 
@@ -337,6 +382,99 @@ const orchestrator: OrchestratorPort = {
 // ── ETA 调度 ─────────────────────────────────────────────────────────────
 
 const scheduler = getScheduler()
+
+// ── 任务计划 ─────────────────────────────────────────────────────────────
+
+const planRunner = getPlanRunner()
+
+/**
+ * 计划器要的东西全部在这里注入。
+ *
+ * ★ suspendScheduler 是「脚本优先级最高」这条铁律的落点：计划器启动执行**之前**先调它，
+ *   采集调度器先礼后兵地让开；脚本跑完调用返回的函数把调度器放回去（并安排一次重读队列）。
+ *   反过来不成立 —— 调度器看到实例上有脚本在跑只会让路，绝不会去挤掉脚本。
+ */
+// ── 应用内更新 ───────────────────────────────────────────────────────────
+
+const updateCenter = getUpdateCenter()
+
+/**
+ * 更新中心要的东西。
+ *
+ * ★ busy() 直接问实例占用表：脚本执行、采集采样/派遣、账号登录、开机配置这四条会动设备的链路
+ *   都在那张表里登记，问它一个就够。**仅仅开着自动采集不算忙** —— 那只是挂了个定时器，
+ *   装完更新会自动重启面板、调度器按 scheduler.json 复原，没什么可丢的。
+ */
+function updateDeps(): Parameters<typeof updateCenter.init>[0] {
+  return {
+    currentVersion: () => app.getVersion(),
+    packaged: () => app.isPackaged,
+    // electron-builder 的 portable 目标会给进程塞这个环境变量；nsis 装的没有。
+    portable: () => Boolean(process.env.PORTABLE_EXECUTABLE_DIR),
+    busy: () => instanceAccess.anyBusy(),
+    releasePageUrl: () => releasePageUrl(),
+    openExternal: (url) => shell.openExternal(url),
+    updater: () => getElectronUpdater(),
+    publish: (state) => emitUpdate('update:changed', state),
+    // ★ 更新日志要落盘（app.ndjson），不能只打 console：打包后的 Windows 应用是 GUI 子系统，
+    //   console 输出没地方去，出了问题用户与我们都无从查起。
+    log: (level, message) => {
+      if (level === 'error' || level === 'warn') console.warn(`[update] ${message}`)
+      else console.log(`[update] ${message}`)
+      void appendAppLog(paths().logsDir, {
+        ts: Date.now(),
+        level,
+        runId: null,
+        instanceIndex: null,
+        scope: 'update',
+        message
+      }).catch(() => undefined)
+    }
+  }
+}
+
+/**
+ * electron-updater 的实例**惰性构造**。
+ *
+ * ★ 不能在模块顶层建：它的 autoUpdater 一被取值就会去读 app.getVersion() / app-update.yml，
+ *   而模块求值发生在 app.whenReady() 之前 —— 打包后会在启动阶段直接炸掉，
+ *   表现是「窗口标题 Error、什么都没起来」（2026-09-18 踩过）。
+ */
+let electronUpdater: ReturnType<typeof createElectronUpdater> | null = null
+function getElectronUpdater(): ReturnType<typeof createElectronUpdater> {
+  if (!electronUpdater) {
+    electronUpdater = createElectronUpdater((level, message) => {
+      if (level === 'error' || level === 'warn') console.warn(message)
+      else console.log(message)
+    })
+  }
+  return electronUpdater
+}
+
+function registerUpdateHandlers(): void {
+  handleUpdate(UPDATE_CH.state, () => updateCenter.getState())
+  handleUpdate(UPDATE_CH.check, () => updateCenter.check())
+  handleUpdate(UPDATE_CH.download, () => updateCenter.download())
+  handleUpdate(UPDATE_CH.install, () => updateCenter.install())
+  handleUpdate(UPDATE_CH.openReleasePage, () => updateCenter.openReleasePage())
+}
+
+function planDeps(): PlanDeps {
+  return {
+    dataDir: () => paths().dataDir,
+    listAccounts: () => accounts.list(),
+    listScripts: () => scripts.list(),
+    startRun: (req) => orchestrator.start(req),
+    stopRun: (runId) => orchestrator.stop(runId),
+    onRunChange: (cb) => orchImpl.onChange(cb),
+    suspendScheduler: (index, graceMs, reason) =>
+      scheduler.suspendForScript(index, graceMs, reason),
+    log: (level, message) => {
+      if (level === 'error' || level === 'warn') console.warn(`[plan] ${message}`)
+      else console.log(`[plan] ${message}`)
+    }
+  }
+}
 
 /**
  * 调度器要的东西全部在这里注入。
@@ -866,6 +1004,106 @@ async function aiRecoverForScheduler(
     return false
   }
 }
+/**
+ * ★ 脚本执行链路上的 AI 恢复：执行器某一步重试耗尽时喊过来（worker → orchestrator → 这里）。
+ *
+ * 与调度器那条链走的是**同一个** recoverUnknownWithUpdate（同一套风险评估、同一套自学习），
+ * 只有「已知界面」的判据不一样：
+ *   · 调度器：世界地图 / 城内 / 部队面板这些固定界面（KNOWN_SCREEN_TEMPLATES）
+ *   · 脚本：  这一步本来在等的那几张模板 —— 更贴切，也让自学到的关闭模板更可信
+ *     （「关掉它之后脚本要的东西出现了」几乎可以确定关掉的就是挡路的弹窗）。
+ *
+ * ★ 绝不抛异常：AI 是兜底手段，它自己出问题不能反过来把脚本判死。
+ *   需要人处理的两种情况（风险过高 / 游戏在更新）走 requiresAttention，由引擎停止重试。
+ *
+ * ★ 期间执行器停在 await 上不动手，所以这里可以放心用同一个 serial 截图和点击。
+ */
+async function aiAssistForRun(req: AiAssistRequest): Promise<AiAssistResult> {
+  if (!aiAdvisor.isActive()) {
+    return { handled: false, message: 'AI 顾问没开启（或没配 Key），本次不介入。' }
+  }
+  if (!planRunner.getConfig().aiAssist) {
+    return { handled: false, message: '计划配置里关掉了「脚本执行期间允许 AI 介入」。' }
+  }
+  try {
+    const dev = await ensureDevice(deps, req.instanceIndex)
+    const s = getSettings()
+    const raw = await captureRaw(dev.serial)
+    const io: RecoverIo = {
+      capture: () => captureRaw(dev.serial),
+      tap: async (x, y) => {
+        const p = toDevicePoint(dev, { x, y })
+        await tap(dev.serial, p.x, p.y)
+      },
+      key: (k) => adbKey(dev.serial, k)
+    }
+
+    // 「脚本这一步在等的模板」= 复验判据。取不到（tap 固定坐标那种）就只看画面有没有变。
+    let recognize: ((f: RawFrame) => Promise<boolean>) | undefined
+    let existingCloseTemplates: PreparedTemplate[] | undefined
+    if (req.templateSetId) {
+      try {
+        const prepared = await loadPrepared(req.templateSetId, {
+          refW: s.refWidth,
+          shrink: s.shrink
+        })
+        existingCloseTemplates = [...prepared.values()].filter((t) => isClosePopupTemplateId(t.id))
+        const expect = req.expectTemplateIds
+          .map((id) => prepared.get(id))
+          .filter((t): t is PreparedTemplate => Boolean(t))
+        if (expect.length > 0) {
+          recognize = async (f) => {
+            const frame = await prepareFrame(f, {
+              refW: s.refWidth,
+              refH: s.refHeight,
+              shrink: s.shrink
+            })
+            for (const tpl of expect) {
+              const m = await matchIn(frame, tpl, { roi: tpl.defaultRoi })
+              if (m.found) return true
+            }
+            return false
+          }
+        }
+      } catch (e) {
+        alertLog(
+          'warn',
+          `[实例${req.instanceIndex}][AI] 载入脚本模板集失败，复验退化为只看画面变化：${AppError.from(e).message}`
+        )
+      }
+    }
+
+    const r = await recoverUnknownWithUpdate(
+      {
+        instanceIndex: req.instanceIndex,
+        context: 'script-run',
+        raw,
+        io,
+        refWidth: s.refWidth,
+        refHeight: s.refHeight,
+        setId: req.templateSetId,
+        attempt: 1,
+        recognize,
+        existingCloseTemplates,
+        log: (l, m, d) => alertLog(l, `[实例${req.instanceIndex}][AI] ${m}`, d)
+      },
+      () => foregroundPackage(dev.serial),
+      () => undefined
+    )
+    if (r === 'updated') {
+      return { handled: true, message: '游戏正在更新，已按更新流程处理，稍后重试这一步。' }
+    }
+    if (r === 'recovered') {
+      return { handled: true, message: `AI 顾问已处理挡在前面的界面（${req.reason}）。` }
+    }
+    return { handled: false, message: 'AI 顾问看过了，没有可执行的低风险操作。' }
+  } catch (e) {
+    const err = AppError.from(e)
+    const needsHuman = ['AI_RISK_BLOCKED', 'GAME_UPDATE_REQUIRED'].includes(err.code)
+    return { handled: false, message: err.message, requiresAttention: needsHuman }
+  }
+}
+
 /** 每日数据统计：所有事件源（派兵 / 失败 / 回城 / 告警 / 暂停恢复 / 快照）都汇到它的 record()。 */
 const statsCenter = getStatsCenter()
 
@@ -1537,6 +1775,30 @@ async function bootstrap(): Promise<void> {
     })
   }
 
+  // 应用内更新：注册通道 + 起来 30 秒后静默查一次（只查，不下不装）。
+  //   ★ 延迟是有意的：启动那几秒在开实例、连 adb、恢复调度，不该再去挤网络。
+  try {
+    registerUpdateHandlers()
+    updateCenter.init(updateDeps())
+    const t = setTimeout(() => {
+      void updateCenter.check()
+    }, 30_000)
+    t.unref?.()
+  } catch (e) {
+    console.error('[main] 更新中心初始化失败：', e)
+  }
+
+  // 任务计划器：读计划表、恢复记账、排定时器。起不来不该阻塞面板（顶多是不自动跑脚本）。
+  try {
+    await planRunner.init(planDeps())
+  } catch (e) {
+    console.error('[main] 任务计划器初始化失败：', e)
+    emit('app:toast', {
+      level: 'warning',
+      message: `任务计划没能启动：${e instanceof Error ? e.message : String(e)}。定时脚本不会自动跑，其余功能不受影响。`
+    })
+  }
+
   createWindow()
 }
 
@@ -1546,6 +1808,12 @@ async function shutdown(): Promise<void> {
   safely('停止实例轮询', () => registry.stop())
   // 卡死恢复流程要先中止：它在实例锁内跑，scheduler.stop() 会等锁，不中止就得等它跑完（可能好几分钟）。
   safely('中止卡死恢复流程', () => freezeShutdown.abort())
+  // 计划器先停：它手里的定时器和「等执行结束」的 Promise 都该在编排器收尸之前撤掉。
+  try {
+    await planRunner.stop()
+  } catch (e) {
+    console.error('[main] 关闭任务计划器失败：', e)
+  }
   // 调度器的定时器虽然都 unref 过（不会钉住进程），但状态要趁还活着落盘。
   try {
     await scheduler.stop()
@@ -1598,6 +1866,8 @@ async function shutdown(): Promise<void> {
   }
   resetBotIpc()
   resetAiIpc()
+  resetPlanIpc()
+  resetUpdateIpc()
   resetIpc()
 }
 

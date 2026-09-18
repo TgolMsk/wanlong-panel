@@ -45,7 +45,13 @@ let failAt = 0
 let ambiguous = false
 let beforeClone = async () => {}
 let beforeRefresh = async () => {}
+/** 假驱动不支持摆窗口 —— 正好顺带验证「不支持时面板该拿到 false」。 */
+const windowCalls: string[] = []
 const driver: MumuPort = {
+  windowSupported: () => false,
+  window: async (index, action) => {
+    windowCalls.push(`${index}:${action}`)
+  },
   list: () => list,
   get: (i) => list.find((v) => v.index === i),
   refresh: async () => {

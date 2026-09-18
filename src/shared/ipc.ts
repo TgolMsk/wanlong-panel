@@ -22,7 +22,8 @@ import type {
   DeviceInfo,
   HealthReport,
   MumuInstance,
-  ResolvedPaths
+  ResolvedPaths,
+  WindowAction
 } from './domain'
 import type { LoginCommand, LoginInput, LoginRequest, LoginSession } from './login'
 import type {
@@ -120,6 +121,8 @@ export const CH = {
   instanceClone: 'instance:clone',
   instanceDelete: 'instance:delete',
   instanceConfig: 'instance:config',
+  instanceWindow: 'instance:window',
+  instanceWindowSupported: 'instance:windowSupported',
   instanceBase: 'instance:base',
   instanceSetBase: 'instance:setBase',
   // 设备
@@ -198,6 +201,10 @@ export type IpcRoutes = {
   'instance:close': [[index: number], void]
   'instance:restart': [[index: number], void]
   /** 返回新建实例的 index 列表。 */
+  /** 摆放模拟器窗口：隐藏 / 显示 / 缩到角落。与自动化无关，只影响屏幕上占多大地方。 */
+  'instance:window': [[index: number, action: WindowAction], void]
+  /** 当前驱动支不支持摆窗口（雷电与 macOS 版 MuMu Pro 不支持）。 */
+  'instance:windowSupported': [[], boolean]
   'instance:create': [[opts: CreateInstanceOptions], number[]]
   'instance:clone': [[index: number], number[]]
   'instance:delete': [[index: number], void]

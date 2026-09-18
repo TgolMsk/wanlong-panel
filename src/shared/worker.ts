@@ -68,6 +68,8 @@ export type MainToWorker =
   | { type: 'preview'; enabled: boolean }
   /** 不跑脚本、只做一次检测，供模板编辑器「立即验证」使用。 */
   | { type: 'detectOnce'; requestId: string; specs: DetectSpec[] }
+  /** AI 顾问的答复（对应 worker 发来的 aiConsult）。 */
+  | { type: 'aiResult'; requestId: string; result: AiAssistResult }
 
 // ── ② worker -> 主进程 ────────────────────────────────────────────────────
 
@@ -87,8 +89,44 @@ export type WorkerToMain =
       jpeg: ArrayBuffer
     }
   | { type: 'detectResult'; requestId: string; results: MatchResult[] }
+  /**
+   * ★ 卡住了，请主进程的 AI 顾问看一眼（多半是活动弹窗挡在前面）。
+   *
+   * 为什么不在 worker 里直接问模型：顾问要读 <dataDir>/ai.json 里的凭据、要限频、
+   * 要往模板库里写自学模板 —— 那些状态全在主进程，一份就够。worker 只负责「喊一声、等回答」。
+   *
+   * ★ 期间 worker 必须停手：主进程会用**同一个 serial** 自己截图、自己点，
+   *   两边同时驱动一定打架。引擎在 await 这条消息的回执，天然满足。
+   */
+  | {
+      type: 'aiConsult'
+      requestId: string
+      runId: string
+      instanceIndex: number
+      /** 卡在哪一步（日志归档用）。 */
+      stepId: string | null
+      /** 中文说明，例如「步骤「点联盟」重试 2 次仍找不到模板」。 */
+      reason: string
+      /**
+       * 这一步本来在等的模板 id。主进程用它做复验的「已知界面」判据：
+       * AI 关掉弹窗后这些模板出现了，才算真的回到了脚本要的界面（也才值得把那个 × 学成模板）。
+       */
+      expectTemplateIds: string[]
+    }
   | { type: 'finished'; snapshot: RunSnapshot }
   | { type: 'error'; error: SerializedError }
+
+/** AI 顾问对一次 aiConsult 的答复。 */
+export interface AiAssistResult {
+  /** 画面已经被改变（弹窗关掉了 / 点了一下），调用方应该重新截图再判。 */
+  handled: boolean
+  /** 中文说明，直接进运行日志。 */
+  message: string
+  /** 需要人处理（风险过高 / 游戏在更新），引擎不再重试，直接按失败收尾。 */
+  requiresAttention?: boolean
+  /** 顺手学到的模板 id（自学习成功时），只用于日志。 */
+  harvestedTemplateId?: string | null
+}
 
 // ── ③ worker <-> 渲染进程（MessagePort 直连）──────────────────────────────
 

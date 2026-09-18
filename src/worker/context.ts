@@ -35,7 +35,12 @@ import type {
   RawFrame,
   Rect
 } from '@shared/vision'
-import type { WorkerAttachPayload, WorkerToMain, WorkerToRenderer } from '@shared/worker'
+import type {
+  AiAssistResult,
+  WorkerAttachPayload,
+  WorkerToMain,
+  WorkerToRenderer
+} from '@shared/worker'
 import { RunLogger } from './logger'
 
 // ── 与模块 b / 模块 c 的接口（端口，不是实现）────────────────────────────
@@ -92,6 +97,20 @@ export interface RunContextInit {
   emit: (m: WorkerToRenderer) => void
   /** 回报主进程（parentPort）。 */
   report: (m: WorkerToMain) => void
+  /**
+   * 卡住时请主进程的 AI 顾问看一眼。没接（或 AI 没开）时不给，引擎自然退回原有行为。
+   * ★ 实现方必须**不抛异常**：AI 是兜底手段，它自己出问题不能反过来把脚本判死。
+   */
+  consultAi?: (req: AiConsultRequest) => Promise<AiAssistResult>
+}
+
+/** 引擎发起一次 AI 求助时要说清楚的三件事。 */
+export interface AiConsultRequest {
+  stepId: string | null
+  /** 中文原因，进日志也进模型提示。 */
+  reason: string
+  /** 这一步本来在等的模板 id（复验与自学习的判据）。 */
+  expectTemplateIds: string[]
 }
 
 /** 留痕截图的输出宽度。比预览大一些，出问题时要看得清按钮。 */
@@ -119,6 +138,9 @@ export class RunContext {
   aborted = false
   /** 暂停中（引擎在每步开始前会等它变 false）。 */
   paused = false
+
+  /** AI 顾问端口；没接就是 null，引擎据此判断要不要求助。 */
+  readonly consultAi: ((req: AiConsultRequest) => Promise<AiAssistResult>) | null
 
   private readonly emitFn: (m: WorkerToRenderer) => void
   private readonly reportFn: (m: WorkerToMain) => void
@@ -154,6 +176,7 @@ export class RunContext {
     this.vision = init.vision
     this.emitFn = init.emit
     this.reportFn = init.report
+    this.consultAi = init.consultAi ?? null
 
     this.minInterval = Math.max(0, p.settings.minCaptureIntervalMs || MIN_CAPTURE_INTERVAL_MS)
     this.sx = p.settings.refWidth / (p.script.refWidth || p.settings.refWidth)

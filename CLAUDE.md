@@ -456,3 +456,161 @@ npm run check:alerts    # 174 项断言，不碰模拟器、不发真实网络�
 - antd 6 底层是 `@rc-component/table`，固定单元格类名是 `ant-table-cell-fix-start` / `-fix-end`（**不是** v5 的 `-fix-left` / `-fix-right`）。
 - 本主题表格底色是毛玻璃透明色，固定列会把相邻列透出来看起来像"重叠"；tokens.css 已全局把固定单元格设为 `--wl-bg-elevated` 实心色。
 - `scroll.x` 不要写死大于各列宽度之和的数（会把相邻列拉伸到固定列下面），用 `'max-content'`。
+
+## 任务计划：账号勾选脚本 + 运行时间（`src/main/plan/`）
+
+使用说明见 `README.md` 第 13 节。分层：`store.ts` 读写 `<dataDir>/plans.json`（容错，可手改），
+`ipc.ts` 自带 `plan:*` 通道（IpcRoutes 已冻结，做法与 `scheduler/ipc.ts` 一致），
+`index.ts` 是计划器本体（定时评估 / 每实例队列 / 抢占 / 记账）。契约与**全部时间纯函数**在 `src/shared/plan.ts`。
+
+### 五条铁律
+
+1. **★ 脚本优先级最高。** 启动执行前必须先 `scheduler.suspendForScript(index, graceMs, reason)`：
+   先礼（等在飞的采样/派遣链自然收尾）后兵（`autoController.abort()` + 等锁排空）。返回的函数用来放回，
+   放回时**换一个新的 AbortController**（旧的已 aborted，不换下次 `onWake` 一进 `checkAuto` 就死）
+   并安排 15 秒后「重读队列校验」。反过来不成立：调度器看到 `scriptHolds > 0` 或 `busyRunIdOf` 非空只会让路。
+2. **每实例串行。** 队列按 instanceIndex 分，`active` Map 保证同一实例同时只发一个执行。
+   全局并发上限仍归编排器管（`maxConcurrentInstances`），撞上了按 `CONCURRENCY_LIMIT` **退避重试、不算失败**。
+3. **时间全是北京时间**，且**只有一份实现**：`nextFireAt` / `previousFireAt` / `inClockWindow` 在 `shared/plan.ts`，
+   主进程排定时器和面板显示「下次运行」用的是同一个函数。绝不用 `toLocaleString()` / `getHours()`。
+4. **等不到就跳过。** `DEVICE_NOT_READY` / `ADB_*` / 排队超 `queueWaitMs` → 记 `skipped`，不计失败、不重试；
+   错过的触发点只在 `catchUpMs` 内补跑一次。挂机工具最怕半夜攒 200 个任务天亮一起冲。
+5. **`lastRunAt` 必须落盘**（`plans.json` 的 `runtime` 段）：补跑判定要靠它，
+   不存的话早上 8 点跑过的任务，8 点 05 分重启面板会被当成「今天还没跑」再跑一遍。
+
+### AI 介入脚本执行
+
+链路：worker 某步重试耗尽 → `WorkerToMain.aiConsult` → orchestrator → `RunDeps.aiAssist`
+→ main 的 `aiAssistForRun()` → 与调度器共用的 `recoverUnknownWithUpdate()` → 回 `aiResult` → 引擎重试那一步。
+
+- 期间 worker **停在 await 上不动手**，所以主进程可以放心用同一个 serial 截图/点击（跨进程 adb 队列不共享）。
+- 「已知界面」判据是**这一步本来在等的模板**（`expectTemplateIds`，从 `tapTemplate.templateId` / `waitFor.cond` 收集），
+  比调度器那条链的固定界面更贴切，自学到的关闭模板也更可信。
+- `onFail: continue` 的步骤不问 AI；问询前后的日志是 debug 级（AI 没开时每个失败步骤都会走一遍，别刷屏）。
+- 开关：计划配置的 `aiAssist` **且** AI 顾问自身 `isActive()`。两者任一为假就原样返回「未介入」。
+
+### 落盘
+
+```
+<dataDir>/plans.json    计划表（config + plans + runtime 记账），可手改，读取容错
+```
+
+### 自检
+
+```bash
+npm run check:plan    # 75 项断言，不碰模拟器、不起 utilityProcess
+```
+
+## 可视化脚本编辑器：截图直接成块（`src/shared/blocks.ts` + `renderer/features/blocks/`）
+
+使用说明见 `README.md` 第 5 节第 3 步。分层：
+
+```
+src/shared/blocks.ts                  纯逻辑：① 块树增删改查（路径定位）② DSL ⇄ 中文块目录
+renderer/features/blocks/BlockEditor.tsx        卡片列表 + 每种块的表单 + 条件编辑器
+renderer/features/blocks/CaptureBlockModal.tsx  抓帧 → 拉框 → 存模板 + 插块（一次点击两件事）
+renderer/views/ScriptsView.tsx                  「可视化 / JSON」切换
+```
+
+### 五条铁律
+
+1. **★ 单一数据源是 text（JSON 字符串）。** 可视化模式每次改动都 `JSON.stringify` 回 text，
+   两个模式来回切永远不会不一致。**绝不要**为了省一次序列化而在旁边另存一份 ScriptDef —— 那就是两份真相。
+2. **块树操作全部返回新数组**，不原地改；路径形如 `[1,'then',0]`（数字是同级序号，字符串是分支名）。
+   `locate()` 返回 null 表示路径已失效（刚删过一块又点了旧按钮），调用方原样返回不报错。
+3. **`cloneWithNewIds` 必须把子块的 id 也换掉**，否则复制一个 if 块之后保存会报 id 重复。
+4. **截图存模板不传 defaultRoi**，交给主进程按 bounds 自动外扩（ROI 最多能带来 43 倍加速）；
+   低方差被拒（`TEMPLATE_LOW_VARIANCE`）必须翻成「换一块有图标或文字的区域」，不能甩错误码。
+5. **组合条件（and/or/not）只读**。可视化模式显示一句概括并提示去 JSON 模式改，
+   **不要**在这里堆一棵可视化表达式树 —— 用得上它的人本来就会写 JSON。
+
+### 中文块 ⇄ DSL 的对照只有一份
+
+`BLOCK_CATALOG` / `makeBlock` / `kindOfStep` / `describeBlock` 全在 `src/shared/blocks.ts`。
+`waitFor` 在面板上拆成「等它出现 / 等它消失」两个入口（按 `cond.present` 区分），
+`kindOfStep(makeBlock(k))===k` 这条往返关系由自检钉死，新增块类型时会第一时间发现漏改。
+
+### 自检
+
+```bash
+npm run check:blocks    # 56 项断言，纯函数，不碰界面
+```
+
+## 模拟器窗口摆放：隐藏 / 缩到角落（`src/main/mumu/window.ts`）
+
+使用说明见 `README.md` 第 2 节。命令是 MuMuManager 的
+`control -v N hide_window | show_window | layout_window -px -py -sw -sh`（2026-09-18 真机实测）。
+
+### 五条要点
+
+1. **★ 纯显示功能，与自动化无关。** Android 按实例配置的分辨率离屏渲染，窗口只是显示器。
+   实测正常 / 718×404 / 完全隐藏三种状态，`screencap` 一律 2560×1440 且画面统计值一致，
+   隐藏期间 adb 仍是 `device`。所以**别**因为窗口状态去改截图、模板或坐标逻辑。
+2. **★ 不省 CPU**（实测 5.2% → 5.1%）。要省资源该动 MuMu 的 `dynamic_adjust_frame_rate` /
+   `dynamic_low_frame_rate_limit`，不是藏窗口。别在 UI 上把它写成「省资源」。
+3. **可选能力**：`EmulatorDriver.setWindow?` 是可选方法，雷电与 macOS 版 MuMu Pro 不实现，
+   面板靠 `instance:windowSupported` 把菜单灰掉。**不要为了凑齐接口写假实现。**
+4. **几何算在主进程**（`cornerWindowRect`，纯函数、有自检）：屏幕尺寸只有 Electron 知道，
+   驱动层是纯 Node。用 `workArea` 不用 `bounds`（避开任务栏），按 index 错开 28px、6 个一轮回，
+   小屏时夹回可用区内 —— 窗口跑到屏幕外等于「点了没反应」。
+5. **请求尺寸不等于最终尺寸**：实测传 480×270，一次被 MuMu 夹成 718×404、一次得到 479×269。
+   要真实几何只能事后问系统或读 `control` 的返回。
+
+### 自检
+
+```bash
+npm run check:mumu    # 第七节 7 项断言：错位、绕回、副屏平移、小屏夹回、负数 index
+```
+
+## 应用内更新：基于 GitHub Release（`src/main/update/`）
+
+使用说明见 `README.md` 第 2 节「装好的面板怎么自己更新」。分层：
+
+```
+src/shared/update.ts          契约 + 版本比较等纯函数 + update:* 通道（自带通道组，同 scheduler/plan）
+src/main/update/index.ts      UpdateCenter：状态机、闸门、中文化错误。**不 import electron-updater**
+src/main/update/electron.ts   UpdaterPort 的真实实现（全工程唯一 import electron-updater 的地方）
+src/main/update/ipc.ts        update:* 通道
+renderer/features/update/UpdateCard.tsx   设置页右栏的卡片
+```
+
+### ★★ 一个会让应用直接起不来的坑（2026-09-18 真机踩过）
+
+```ts
+import { autoUpdater } from 'electron-updater'        // ✗ 主进程**加载期**就抛 SyntaxError
+import electronUpdaterPkg from 'electron-updater'     // ✓ 默认导入再解构
+const { autoUpdater } = electronUpdaterPkg
+```
+
+electron-updater 是 CJS（exports 用 `Object.defineProperty` 定义 getter），本工程是 ESM
+（`"type": "module"`），具名导入在模块解析阶段就失败：`Named export 'autoUpdater' not found`。
+症状是**打包后窗口标题变成 Error、用户数据目录是空的**，开发模式同样起不来 ——
+而且因为死在模块加载期，任何 try/catch 都兜不住。验证办法：
+`node --input-type=module -e "import {x} from 'pkg'"`，Node 会直接把正确写法印出来。
+
+同理，electron-updater 的实例要**惰性构造**（第一次真的要用时才建），别在模块顶层建：
+它一被取值就去读 `app.getVersion()` / `app-update.yml`，那时 `app` 还没 ready。
+
+### 四条铁律
+
+1. **绝不自作主张装**：`autoDownload` / `autoInstallOnAppQuit` 全关。自动的只有启动 30 秒后查一次。
+2. **安装前必须过闸门**：`instanceAccess.anyBusy()` 有返回就拒绝。那张占用表是脚本执行 / 采集 /
+   登录 / 开机配置四条链路的交汇点，问它一个就够，不用挨个模块打听。
+3. **electron-updater 的错误走 'error' 事件，不走 reject** —— onError 必须接，否则下载中途断网会永远卡在「正在下载」。
+4. **错误要翻成人话**：ENOTFOUND / rate limit / sha512 / 缺 app-update.yml 都有中文说法（`describe()`）。
+
+### 打包侧
+
+`electron-builder.yml` 的 `publish` 段（provider: github / TgolMsk / wanlong-panel）是元数据来源：
+它让构建产出 `dist/latest.yml`（Release 附件）与包内的 `<Resources>/app-update.yml`（客户端据此知道去哪查）。
+**`--dir` 构建不会生成 app-update.yml**，验证自动更新必须打完整的 nsis 包。
+本地 `dist:win` / `dist:mac` 与 CI 都显式带 `--publish never`，加 publish 段不会让构建自动发布。
+
+### 自检
+
+```bash
+npm run check:update    # 43 项断言，不联网、不打包（UpdaterPort 是假的）
+```
+
+真机验证过的：打包版启动后查到 GitHub 并正确报「已是最新版 0.2.1」（日志在 `<数据目录>/logs/app.ndjson`）。
+**没验过的**：下载 + 安装那一段 —— 需要线上有一个比本地更新的 Release 才能走通。

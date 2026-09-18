@@ -44,6 +44,7 @@ import { AlertSettingsCard } from '../features/alerts'
 import { BotTestCard } from '../features/bot'
 import HealthBadge from '../components/HealthBadge'
 import GlassCard from '../components/GlassCard'
+import UpdateCard from '../features/update/UpdateCard'
 import ThemeToggle from '../components/ThemeToggle'
 
 const PATH_LABELS: Partial<Record<keyof ResolvedPaths, string>> = {
@@ -431,6 +432,8 @@ export default function SettingsView(): React.JSX.Element {
           <GlassCard padding="sm" title="环境自检">
             <HealthBadge compact={false} />
           </GlassCard>
+
+          <UpdateCard />
 
           <GlassCard padding="sm" title="数据目录">
             {paths ? (

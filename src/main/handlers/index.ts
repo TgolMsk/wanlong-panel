@@ -17,7 +17,8 @@ import type {
   CreateInstanceOptions,
   DeviceInfo,
   MumuInstance,
-  ResolvedPaths
+  ResolvedPaths,
+  WindowAction
 } from '@shared/domain'
 import type {
   AndroidKey,
@@ -75,6 +76,13 @@ export interface MumuPort {
    * MuMu：透传给 `mumutool config <i> -s '<json>'`（只有写入端可用，读取端在 Mac 版是坏的）。
    */
   config(index: number, settings: Record<string, unknown>): Promise<void>
+  /**
+   * 当前驱动支不支持摆放窗口。面板据此决定「窗口」菜单项灰不灰 ——
+   * 雷电与 macOS 版 MuMu Pro 没有对应 CLI 命令。
+   */
+  windowSupported(): boolean
+  /** 隐藏 / 显示 / 缩到角落。'corner' 的具体坐标由主进程按屏幕算。 */
+  window(index: number, action: WindowAction): Promise<void>
   /**
    * 回填由上层掌握的字段。mumu 层自己永远不写这三个，
    * 连接态来自模块 b、账号绑定与 runId 来自模块 d。

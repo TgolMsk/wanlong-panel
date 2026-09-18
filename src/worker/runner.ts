@@ -16,11 +16,17 @@ import sharp from 'sharp'
 import type { MessagePortMain } from 'electron'
 import { AppError, serializeError } from '@shared/errors'
 import type { DetectSpec, PreparedTemplate } from '@shared/vision'
-import type { MainToWorker, RendererToWorker, WorkerToMain, WorkerToRenderer } from '@shared/worker'
+import type {
+  AiAssistResult,
+  MainToWorker,
+  RendererToWorker,
+  WorkerToMain,
+  WorkerToRenderer
+} from '@shared/worker'
 import type { WorkerAttachPayload } from '@shared/worker'
 import { Engine } from './engine'
 import { RunContext } from './context'
-import type { DeviceIo, VisionIo } from './context'
+import type { AiConsultRequest, DeviceIo, VisionIo } from './context'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ★ 模块 b（adb）/ 模块 c（视觉）适配层
@@ -121,6 +127,56 @@ function emitToRenderer(msg: WorkerToRenderer): void {
   rendererPort?.postMessage(msg)
 }
 
+// ── AI 顾问端口（worker → 主进程 → worker）──────────────────────────────
+//
+// worker 只负责「喊一声、等回答」：凭据、限频、风险评估、模板自学习全在主进程，
+// 期间主进程会用**同一个 serial** 自己截图自己点，所以引擎必须停在这条 await 上不动手。
+
+/** 一次求助最多等多久。顾问自己有 timeoutMs（默认 40s），这里留足两阶段问询 + 复验的时间。 */
+const AI_CONSULT_TIMEOUT_MS = 180_000
+
+let aiSeq = 0
+const aiPending = new Map<string, (r: AiAssistResult) => void>()
+
+/** ★ 绝不抛异常：AI 是兜底手段，它自己出问题不能反过来把脚本判死。 */
+function consultAi(req: AiConsultRequest): Promise<AiAssistResult> {
+  if (!ctx) {
+    return Promise.resolve({ handled: false, message: '执行器还没就绪，本次不问 AI。' })
+  }
+  const requestId = `ai-${++aiSeq}`
+  const runId = ctx.runId
+  const instanceIndex = ctx.instanceIndex
+  return new Promise<AiAssistResult>((resolve) => {
+    let done = false
+    const finish = (r: AiAssistResult): void => {
+      if (done) return
+      done = true
+      aiPending.delete(requestId)
+      clearTimeout(timer)
+      resolve(r)
+    }
+    const timer = setTimeout(
+      () => finish({ handled: false, message: 'AI 顾问超时没有回应，按未处理继续。' }),
+      AI_CONSULT_TIMEOUT_MS
+    )
+    timer.unref?.()
+    aiPending.set(requestId, finish)
+    try {
+      send({
+        type: 'aiConsult',
+        requestId,
+        runId,
+        instanceIndex,
+        stepId: req.stepId,
+        reason: req.reason,
+        expectTemplateIds: req.expectTemplateIds
+      })
+    } catch (e) {
+      finish({ handled: false, message: `请求 AI 顾问失败：${String(e)}` })
+    }
+  })
+}
+
 function fail(e: unknown, fallbackMessage: string): void {
   const err = AppError.from(e, 'UNKNOWN')
   console.error(`[runner] ${fallbackMessage}：${err.message}`)
@@ -131,10 +187,7 @@ function fail(e: unknown, fallbackMessage: string): void {
 // 消息处理
 // ═══════════════════════════════════════════════════════════════════════════
 
-async function onAttach(
-  payload: WorkerAttachPayload,
-  port?: MessagePortMain
-): Promise<void> {
+async function onAttach(payload: WorkerAttachPayload, port?: MessagePortMain): Promise<void> {
   if (ctx) throw new AppError('INVALID_ARGUMENT', '该执行器已经绑定过一次执行，不能重复 attach。')
   if (attaching) return
   attaching = true
@@ -164,7 +217,8 @@ async function onAttach(
       device: deviceIo,
       vision: visionIo,
       emit: emitToRenderer,
-      report: send
+      report: send,
+      consultAi
     })
     engine = new Engine(ctx, emitToRenderer, send)
 
@@ -263,6 +317,12 @@ parentPort.on('message', (e) => {
       case 'detectOnce':
         void detectOnce(msg.requestId, msg.specs).catch((err: unknown) => fail(err, '单次检测失败'))
         break
+      case 'aiResult': {
+        const waiter = aiPending.get(msg.requestId)
+        // 找不到 = 已经超时自行放弃了，直接丢掉，别让晚到的答复把画面又改一次。
+        if (waiter) waiter(msg.result)
+        break
+      }
       default:
         break
     }

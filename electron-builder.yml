@@ -6,6 +6,20 @@ directories:
   output: dist
   buildResources: build
 
+# ── 应用内更新（electron-updater）的元数据来源 ────────────────────────────
+#
+# 这一段**不会**让构建自动发布：CI 与本地都显式带 `--publish never`，
+# 它的作用是让 electron-builder 生成两个文件：
+#   · dist/latest.yml                     版本号 + 文件名 + sha512（Release 附件，客户端据此判断有没有新版）
+#   · <Resources>/app-update.yml（打进包里）  告诉运行时的 electron-updater「去哪个仓库查」
+# 少了这一段，装好的面板一点「检查更新」就会报「找不到 app-update.yml」。
+#
+# 仓库是公开的，所以客户端查更新不需要任何 token。
+publish:
+  - provider: github
+    owner: TgolMsk
+    repo: wanlong-panel
+
 # out/ 是 electron-vite 的产物（main / preload / renderer 三段），package.json 的 main
 # 指向 out/main/index.js。runner.js 与 index.js 同在 out/main/ 下，
 # orchestrator 用 join(__dirname,'runner.js') fork —— 所以整个 out/ 必须原样打进去。

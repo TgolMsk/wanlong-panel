@@ -98,6 +98,9 @@ src/
 │   │    └─ launch.ts   冷启动恢复：游戏没在前台就用 **monkey** 拉起并等到前台（am start 对本游戏无效）
 │   │    └─ resources/  「道具 → 资源统计」表：预检 → 导航 → 读表 → 还原   【见 README 第 11 节】
 │   ├─ scheduler/     ETA 记账、定时唤醒、queueFreeHook、exclusive() 借锁、onAutoChanged【见 README 第 6 / 11 节】
+│   │    └─ suspendForScript()  ★ 为脚本让路（先礼后兵）：任务计划器启动执行前调它
+│   ├─ plan/          任务计划：账号勾选脚本 + 运行时间 → 到点入队 → 抢占 → 执行 → 记账【见 README 第 13 节】
+│   │    ★ 只编排，不碰 adb / 不做视觉；执行仍然交给 orchestrator 的 utilityProcess
 │   ├─ bot/           机器人动作层 createBotActions（Electron 无关，deps 注入）+ bot:* 通道【见 README 第 11 节】
 │   ├─ stats/         数据统计：reduce（纯函数）/ store（日桶文件）/ StatsCenter 日切定时器【见 README 第 11 节】
 │   ├─ ai/            AI 顾问：认不出界面时问视觉大模型（OpenAI 兼容）→ 白名单点击 → 复验 → 自学关闭按钮模板【README 第 12 节】
@@ -117,6 +120,8 @@ src/
 ├─ scripts/          内置示例脚本（游戏装好后往这里加）             【模块 d】
 ├─ preload/          window.api + MessagePort 转发（已完成）         【模块 e】
 └─ renderer/         React + antd 面板 UI                            【模块 f】
+     └─ features/blocks/  可视化脚本编辑器：块卡片 + 「从画面截取 → 直接成块」【见 README 第 5 节】
+        ★ 纯逻辑（块树操作 + DSL ⇄ 中文块目录）在 src/shared/blocks.ts，能被离线自检直接跑
 ```
 
 ---

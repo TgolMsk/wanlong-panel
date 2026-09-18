@@ -13,7 +13,7 @@
  */
 
 import { AppError } from '@shared/errors'
-import type { FailPolicy, RunStatus, ScriptStep } from '@shared/script'
+import type { Condition, FailPolicy, RunStatus, ScriptStep } from '@shared/script'
 import type { WorkerToMain, WorkerToRenderer } from '@shared/worker'
 import { execStep } from './actions'
 import { describeCondition, evalCondition } from './conditions'
@@ -232,9 +232,14 @@ export class Engine {
 
       case 'if': {
         const r = await evalCondition(ctx, step.cond)
-        ctx.log('debug', `if 条件${r.ok ? '成立' : '不成立'}：${describeCondition(step.cond)}`, undefined, {
-          stepId: step.id
-        })
+        ctx.log(
+          'debug',
+          `if 条件${r.ok ? '成立' : '不成立'}：${describeCondition(step.cond)}`,
+          undefined,
+          {
+            stepId: step.id
+          }
+        )
         const branch = r.ok ? step.then : (step.else ?? [])
         const o = await this.runBlock(branch, false)
         return o.type === 'done' ? { type: 'next' } : o
@@ -257,9 +262,14 @@ export class Engine {
             ctx.invalidateFrame()
             const r = await evalCondition(ctx, step.while)
             if (!r.ok) {
-              ctx.log('debug', `循环结束（while 不成立：${r.reason ?? ''}），共 ${n} 轮。`, undefined, {
-                stepId: step.id
-              })
+              ctx.log(
+                'debug',
+                `循环结束（while 不成立：${r.reason ?? ''}），共 ${n} 轮。`,
+                undefined,
+                {
+                  stepId: step.id
+                }
+              )
               break
             }
           }
@@ -300,10 +310,35 @@ export class Engine {
       }
     }
 
+    // ── AI 兜底：重试都用完了，让顾问看一眼再决定要不要判失败 ──
+    //   onFail=continue 的步骤跳过：作者已经明说了「这一步失败就算了」，
+    //   为它去问一次视觉大模型既费钱又费时间。
+    if (
+      lastErr &&
+      ctx.consultAi &&
+      (step.onFail?.kind ?? 'abort') !== 'continue' &&
+      !this.stopping &&
+      !ctx.aborted
+    ) {
+      const assisted = await this.consultAndRetry(step, lastErr)
+      if (assisted.retried) {
+        lastErr = assisted.error
+        if (!lastErr) {
+          // AI 清掉障碍后这一步成功了，按正常成功收尾。
+          ctx.snapshot.stats.lastTickMs = Date.now() - t0
+          if (step.afterDelayMs) await ctx.sleep(step.afterDelayMs)
+          return { type: 'next' }
+        }
+      }
+    }
+
     if (lastErr) return this.handleFailure(step, lastErr)
 
     // ── 成功收尾 ──
-    if (step.capture === true || (step.capture === undefined && ctx.settings.shotPolicy === 'always')) {
+    if (
+      step.capture === true ||
+      (step.capture === undefined && ctx.settings.shotPolicy === 'always')
+    ) {
       const shot = await ctx.shot(`${step.id}-ok`)
       ctx.log('debug', `步骤完成留痕`, undefined, { stepId: step.id, shot: shot ?? undefined })
     }
@@ -311,6 +346,67 @@ export class Engine {
 
     ctx.snapshot.stats.lastTickMs = Date.now() - t0
     return { type: 'next' }
+  }
+
+  /**
+   * ★ AI 介入：某一步重试耗尽 → 请主进程的视觉大模型看一眼当前画面 →
+   * 它把挡路的东西（多半是活动弹窗）关掉了，就再给这一步一次机会。
+   *
+   * 三条边界：
+   *   · 每一步只问一次。问完还不行就老老实实按 onFail 处置 —— 顾问是兜底，不是无限续命。
+   *   · 顾问说「需要人处理」（风险过高 / 游戏在更新）时不再重试，直接带着原因判失败。
+   *   · 顾问端口**不抛异常**（runner 的适配层保证），所以这里不用 try/catch 兜底也不会炸；
+   *     真抛了也只是让这一步按原错误失败，不会比没有 AI 更糟。
+   */
+  private async consultAndRetry(
+    step: ScriptStep,
+    err: AppError
+  ): Promise<{ retried: boolean; error: AppError | null }> {
+    const ctx = this.ctx
+    if (!ctx.consultAi) return { retried: false, error: err }
+
+    const stepName = step.name ?? step.id
+    // ★ 这条是 debug：AI 没开时每个失败步骤都会走一遍这里（主进程那边才知道开没开），
+    //   打成 info 会把运行日志刷满没用的「正在请 AI…」。
+    ctx.log('debug', `步骤「${stepName}」重试耗尽，问一下 AI 顾问…`, undefined, {
+      stepId: step.id
+    })
+
+    const res = await ctx.consultAi({
+      stepId: step.id,
+      reason: `步骤「${stepName}」重试 ${Math.max(0, step.retry ?? 0)} 次后仍然失败：${err.message}`,
+      expectTemplateIds: expectedTemplateIds(step)
+    })
+
+    if (res.requiresAttention) {
+      ctx.log('error', `AI 顾问判定需要人工处理：${res.message}`, undefined, { stepId: step.id })
+      return { retried: false, error: AppError.from(new Error(res.message), 'AI_RISK_BLOCKED') }
+    }
+    if (!res.handled) {
+      // 同理：没介入是常态（AI 没开、限频、没有低风险动作可做），别刷屏。
+      ctx.log('debug', `AI 顾问没有介入：${res.message}`, undefined, { stepId: step.id })
+      return { retried: false, error: err }
+    }
+
+    ctx.log(
+      'info',
+      `AI 顾问已处理：${res.message}${res.harvestedTemplateId ? `（并学到模板「${res.harvestedTemplateId}」）` : ''} —— 重试这一步。`,
+      undefined,
+      { stepId: step.id }
+    )
+    // 画面被主进程动过，缓存的那一帧一定过期了。
+    ctx.invalidateFrame()
+    if (this.stopping || ctx.aborted) return { retried: false, error: err }
+
+    try {
+      await withTimeout(execStep(ctx, step), step.timeoutMs, step)
+      ctx.log('info', `AI 介入后步骤「${stepName}」成功。`, undefined, { stepId: step.id })
+      return { retried: true, error: null }
+    } catch (e) {
+      const again = AppError.from(e, 'STEP_FAILED')
+      ctx.log('warn', `AI 介入后重试仍然失败：${again.message}`, undefined, { stepId: step.id })
+      return { retried: true, error: again }
+    }
   }
 
   /** 重试耗尽后的处置。 */
@@ -332,13 +428,19 @@ export class Engine {
 
     switch (policy.kind) {
       case 'continue':
-        ctx.log('warn', '按 onFail=continue 忽略该失败，继续下一步。', undefined, { stepId: step.id })
+        ctx.log('warn', '按 onFail=continue 忽略该失败，继续下一步。', undefined, {
+          stepId: step.id
+        })
         return { type: 'next' }
       case 'goto':
-        ctx.log('warn', `按 onFail=goto 跳到 label「${policy.label}」。`, undefined, { stepId: step.id })
+        ctx.log('warn', `按 onFail=goto 跳到 label「${policy.label}」。`, undefined, {
+          stepId: step.id
+        })
         return { type: 'goto', label: policy.label, fromStepId: step.id }
       case 'restartApp':
-        ctx.log('warn', '按 onFail=restartApp 冷启动应用后回到脚本开头。', undefined, { stepId: step.id })
+        ctx.log('warn', '按 onFail=restartApp 冷启动应用后回到脚本开头。', undefined, {
+          stepId: step.id
+        })
         return { type: 'restart', fromStepId: step.id }
       case 'abort':
       default:
@@ -398,6 +500,37 @@ export class Engine {
     this.report({ type: 'finished', snapshot })
     this.emit({ type: 'closed', runId: ctx.runId, reason: statusText(status) })
   }
+}
+
+/**
+ * 这一步「本来在等什么模板出现」。交给 AI 顾问当复验判据：
+ * 它关掉弹窗之后这些模板出现了，才算真的回到了脚本要的界面。
+ * 取不出来（tap 固定坐标、swipe 之类）就给空数组 —— 顾问会退化成只看画面有没有变。
+ */
+function expectedTemplateIds(step: ScriptStep): string[] {
+  const out: string[] = []
+  const fromCond = (c: Condition): void => {
+    switch (c.kind) {
+      case 'template':
+        if (c.present !== false) out.push(c.templateId)
+        break
+      case 'anyTemplate':
+        out.push(...c.templateIds)
+        break
+      case 'and':
+        for (const sub of c.all) fromCond(sub)
+        break
+      case 'or':
+        for (const sub of c.any) fromCond(sub)
+        break
+      default:
+        // not / foreground / always / never 里没有「该出现的模板」，跳过。
+        break
+    }
+  }
+  if (step.kind === 'tapTemplate') out.push(step.templateId)
+  else if (step.kind === 'waitFor') fromCond(step.cond)
+  return [...new Set(out)]
 }
 
 function statusText(s: RunStatus): string {

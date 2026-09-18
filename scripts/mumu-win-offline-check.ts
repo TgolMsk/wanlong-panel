@@ -18,6 +18,13 @@ import {
   type MumuWinExecResult
 } from '@main/mumu/mumuwin/cli'
 import { mumuWinPathsOf, parseRegInstallLocations } from '@main/mumu/mumuwin/detect'
+import {
+  CORNER_CASCADE,
+  CORNER_CASCADE_WRAP,
+  CORNER_MARGIN,
+  CORNER_WINDOW_SIZE,
+  cornerWindowRect
+} from '@main/mumu/window'
 import { buildMumuWinSettingArgs, MUMU_WIN_SETTING_KEYS } from '@main/mumu/mumuwin/index'
 import {
   mumuWinRawToInstance,
@@ -497,6 +504,47 @@ console.log('【六、安装目录候选与控制台工具】')
     decodeConsoleText(Buffer.from('"name": "已登录"', 'utf8')) === '"name": "已登录"'
   )
   check('空缓冲', decodeConsoleText(Buffer.alloc(0)) === '')
+}
+
+console.log('【七、缩到角落的位置计算】')
+{
+  // 1920x1080 全屏、任务栏 40px：可用区 1920x1040。
+  const area = { x: 0, y: 0, width: 1920, height: 1040 }
+  const r0 = cornerWindowRect(0, area)
+  check(
+    '实例 0 贴右下角',
+    r0.x === 1920 - CORNER_WINDOW_SIZE.width - CORNER_MARGIN &&
+      r0.y === 1040 - CORNER_WINDOW_SIZE.height - CORNER_MARGIN,
+    `(${r0.x}, ${r0.y})`
+  )
+  check('尺寸就是请求的小窗尺寸', r0.width === 480 && r0.height === 270)
+
+  const r1 = cornerWindowRect(1, area)
+  check(
+    '实例 1 往左上错开一格',
+    r1.x === r0.x - CORNER_CASCADE && r1.y === r0.y - CORNER_CASCADE,
+    `(${r1.x}, ${r1.y})`
+  )
+  check(
+    '错开 WRAP 次之后绕回原点（实例多了也不会一路铺到屏幕中间）',
+    cornerWindowRect(CORNER_CASCADE_WRAP, area).x === r0.x
+  )
+
+  // 多显示器：workArea 的原点不是 (0,0)，位置要跟着平移。
+  const second = { x: 1920, y: 0, width: 2560, height: 1400 }
+  const rs = cornerWindowRect(0, second)
+  check(
+    '副屏上按该屏的可用区算，不是绝对 0,0',
+    rs.x === 1920 + 2560 - 480 - CORNER_MARGIN && rs.y === 1400 - 270 - CORNER_MARGIN,
+    `(${rs.x}, ${rs.y})`
+  )
+
+  // 极端小屏：绝不把窗口摆到可用区外面（用户会以为「点了没反应」）。
+  const tiny = { x: 100, y: 50, width: 320, height: 200 }
+  const rt = cornerWindowRect(3, tiny)
+  check('屏幕比小窗还小时夹回可用区左上角', rt.x === 100 && rt.y === 50, `(${rt.x}, ${rt.y})`)
+
+  check('负数 index 不会算出负偏移', cornerWindowRect(-5, area).x === r0.x)
 }
 
 console.log(`\n===== 通过 ${pass} / 失败 ${fail} =====`)

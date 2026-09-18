@@ -14,7 +14,12 @@
  *   3. open() 返回只代表「命令已下发」，画面就绪要靠 waitReady() 或轮询。
  */
 
-import type { CreateInstanceOptions, EmulatorKind, MumuInstance } from '@shared/domain'
+import type {
+  CreateInstanceOptions,
+  DriverWindowCommand,
+  EmulatorKind,
+  MumuInstance
+} from '@shared/domain'
 
 export interface EmulatorDriver {
   readonly kind: EmulatorKind
@@ -38,4 +43,14 @@ export interface EmulatorDriver {
   config(index: number, settings: Record<string, unknown>): Promise<void>
   /** 等实例真正可用（Android 已启动、画面已出）。超时抛 TIMEOUT。 */
   waitReady(index: number, timeoutMs: number): Promise<MumuInstance>
+  /**
+   * 摆放窗口（**可选能力**）：隐藏 / 显示 / 挪到指定位置与尺寸。
+   *
+   * 不实现 = 这家模拟器的 CLI 没有对应命令（雷电只有 sortWnd / --lockwindow，
+   * macOS 版 MuMu Pro 的 control 子命令族整体不可用），面板会把菜单项灰掉，
+   * **不要为了凑齐接口写一个假的实现**。
+   *
+   * 'corner' 那种语义在主进程就换算成了 layout：屏幕尺寸只有 Electron 知道。
+   */
+  setWindow?(index: number, cmd: DriverWindowCommand): Promise<void>
 }

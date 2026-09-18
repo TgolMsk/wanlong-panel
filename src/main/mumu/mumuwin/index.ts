@@ -15,13 +15,19 @@
  *
  * 命令一览（实测 6.6.4.0 的用法文本）：
  *   info -v all|N / control -v N launch|shutdown|restart / create [-n K] / clone -v N [-n K] / delete -v N /
- *   rename -v N -n 名字 / setting -v N|all [-k 键 -val 值]… [-a|-aw]
+ *   rename -v N -n 名字 / setting -v N|all [-k 键 -val 值]… [-a|-aw] /
+ *   control -v N hide_window|show_window|layout_window [-px -py -sw -sh]（窗口摆放，2026-09-18 实测）
  */
 
 import { statfs } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { INSTANCE_DISK_COST_BYTES } from '@shared/constants'
-import type { CreateInstanceOptions, MumuInstance, MumuWinInstanceRaw } from '@shared/domain'
+import type {
+  CreateInstanceOptions,
+  DriverWindowCommand,
+  MumuInstance,
+  MumuWinInstanceRaw
+} from '@shared/domain'
 import { AppError } from '@shared/errors'
 import type { EmulatorDriver } from '../driver'
 import { getMumuWinCliPath, judgeMumuWinOutput, mumuWinExec, setMumuWinCliPath } from './cli'
@@ -165,7 +171,8 @@ export function createMumuWinDriver(): EmulatorDriver {
     clone: cloneInstance,
     remove: deleteInstance,
     config: configInstance,
-    waitReady: waitInstanceReady
+    waitReady: waitInstanceReady,
+    setWindow
   }
 }
 
@@ -261,6 +268,47 @@ async function control(index: number, action: string, what: string): Promise<voi
   const argv = ['control', '-v', String(index), action]
   const r = await mumuWinExec(argv, { timeoutMs: LIFECYCLE_TIMEOUT_MS })
   judgeMumuWinOutput(r, argv, what)
+}
+
+/**
+ * 摆放窗口：`control -v N hide_window | show_window | layout_window -px -py -sw -sh`。
+ *
+ * ★ 实例没起来时直接报中文错，别让 MuMu 返回一句 errcode 让用户猜。
+ * ★ 尺寸不一定照给的来：2026-09-18 实测传 480×270，一次被夹成 718×404，一次得到 479×269。
+ *   所以调用方**不要**拿传进去的值当作最终窗口尺寸，要用就从 `control` 的返回里读。
+ * ★ 窗口状态与自动化无关：Android 离屏渲染，隐藏/缩小之后 screencap 照常是实例配置的分辨率。
+ */
+async function setWindow(index: number, cmd: DriverWindowCommand): Promise<void> {
+  const raw = await getRaw(index)
+  if (!raw.processStarted) {
+    throw new AppError('MUMU_API_ERROR', `实例 ${index} 没有在运行，没有窗口可以摆放。`, { index })
+  }
+  if (cmd.kind === 'hide') {
+    await control(index, 'hide_window', `隐藏实例 ${index} 的窗口`)
+    return
+  }
+  if (cmd.kind === 'show') {
+    await control(index, 'show_window', `显示实例 ${index} 的窗口`)
+    return
+  }
+  // layout：先确保窗口是显示的，否则「缩到角落」在隐藏状态下等于什么都没发生。
+  await control(index, 'show_window', `显示实例 ${index} 的窗口`)
+  const argv = [
+    'control',
+    '-v',
+    String(index),
+    'layout_window',
+    '-px',
+    String(Math.round(cmd.x)),
+    '-py',
+    String(Math.round(cmd.y)),
+    '-sw',
+    String(Math.round(cmd.width)),
+    '-sh',
+    String(Math.round(cmd.height))
+  ]
+  const r = await mumuWinExec(argv, { timeoutMs: LIFECYCLE_TIMEOUT_MS })
+  judgeMumuWinOutput(r, argv, `摆放实例 ${index} 的窗口`)
 }
 
 /**
