@@ -28,6 +28,7 @@ import { isInstanceUp, useAppStore } from '../store/appStore'
 import { call, tryCall, toast } from '../ipc/useIpc'
 import { SemanticTag } from '../components/StatusTag'
 import GlassCard from '../components/GlassCard'
+import { afterAccountBind } from '../features/gather'
 import AccountLoginDrawer from './AccountLoginDrawer'
 
 interface AccountFormValues {
@@ -118,6 +119,11 @@ export default function AccountsView(): React.JSX.Element {
       toast().success(`账号「${account.name}」已保存`)
       setOpen(false)
       await refreshAccounts()
+      // 表单里也能改绑实例，同样要走那段收尾（account:save 的绑定与 account:bind 等价）。
+      if (account.instanceIndex !== null) {
+        const fresh = await tryCall('account:list')
+        if (fresh) await afterAccountBind(account.instanceIndex, fresh, setAccounts)
+      }
     } catch {
       /* 已提示 */
     } finally {
@@ -129,7 +135,14 @@ export default function AccountsView(): React.JSX.Element {
     const list = await tryCall('account:bind', accountId, index)
     if (list) {
       setAccounts(list)
-      toast().success(index === null ? '已解除绑定' : `已绑定到实例 ${index}`)
+      if (index === null) {
+        const name = accounts.find((a) => a.id === accountId)?.name ?? '该账号'
+        toast().success(`已解除绑定。采集配置仍留在账号「${name}」里，绑回它就会回来。`)
+        return
+      }
+      toast().success(`已绑定到实例 ${index}`)
+      // 与实例列表那个入口共用同一段收尾，否则「从哪绑的」会决定配置搬不搬，说不清。
+      await afterAccountBind(index, list, setAccounts)
     }
   }
 

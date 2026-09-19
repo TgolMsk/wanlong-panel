@@ -22,7 +22,7 @@
  */
 
 import type { Account } from '@shared/domain'
-import { silentCall } from '@/ipc/useIpc'
+import { silentCall, toast } from '@/ipc/useIpc'
 import { defaultGatherConfig, normalizeGatherConfig, type GatherConfig } from './config'
 
 /** 存在 Account.scriptParams 下的哪个键。它不是真的脚本 id，只是一个命名空间。 */
@@ -196,40 +196,55 @@ export function hasLocalGatherConfig(instanceIndex: number): boolean {
 }
 
 /**
- * 刚给实例绑上账号时，把本机存的那份采集配置搬到账号里。
+ * 绑定成功后的统一收尾。**三个绑定入口都必须调它**，否则会出现
+ * 「从实例列表绑就搬、从账号页绑就不搬」这种说不清的差别：
+ *   · views/InstanceAccountCell.tsx（实例列表那一列）
+ *   · views/AccountsView.tsx 的 bind()（账号页「绑定实例」下拉）
+ *   · views/AccountsView.tsx 的 submit()（账号编辑表单里的「绑定实例」）
  *
- * ★ 为什么必须搬：未绑账号时保存的配置落在 localStorage，而**主进程只从绑定账号里读配置**。
- *   不搬的话，用户在实例列表里一绑账号，界面上的配置就会「变回默认值」——
- *   看起来像面板把设置弄丢了（2026-09-18 那次「本地有配置了却搜不到」就是这种困惑）。
- *
- * 只在账号里**还没有**采集配置时搬，绝不覆盖账号上已有的那份（那是更权威的一份）。
- * 搬完清掉本机那份，避免下次解绑又读到一份过期的。
- *
- * @returns null = 没东西可搬（本机没存 / 账号已有配置 / 没绑上账号）；否则带中文说明。
+ * 它做两件事，都是为了同一个目的 —— **别让用户以为面板把采集配置弄丢了**：
+ *   ① 本机存着、账号里没有 → 搬进账号（主进程只从绑定账号读配置，不搬就等于没配）
+ *   ② 本机存着、账号里也有 → **不覆盖账号那份**（那份是正在生效的），
+ *      但必须说出来 —— 否则用户刚在未绑状态下改好保存的那一版会被无声地晾在一边，
+ *      界面上既看不到也不生效，全程零提示。
  */
-export async function migrateLocalConfigToAccount(
+export async function afterAccountBind(
   instanceIndex: number,
-  accounts: readonly Account[]
-): Promise<{ accounts: Account[] | null; message: string } | null> {
+  accounts: readonly Account[],
+  setAccounts: (list: Account[]) => void
+): Promise<void> {
   const account = accounts.find((a) => a.instanceIndex === instanceIndex) ?? null
-  if (!account) return null
+  if (!account) return
+  if (!hasLocalGatherConfig(instanceIndex)) return
 
   const existing = account.scriptParams?.[GATHER_PARAM_SCOPE]?.[GATHER_PARAM_KEY]
-  if (typeof existing === 'string' && existing.trim() !== '') return null
+  if (typeof existing === 'string' && existing.trim() !== '') {
+    toast().warning(
+      `账号「${account.name}」里本来就有一份采集配置，现在生效的是它。` +
+        '本机还留着另一份（未绑账号时保存的），没有覆盖过去 —— ' +
+        '要用本机那份，请打开采集配置核对后重新保存一次。'
+    )
+    return
+  }
 
   const { raw } = readLocal(instanceIndex)
-  if (typeof raw !== 'string' || raw.trim() === '') return null
-
+  if (typeof raw !== 'string' || raw.trim() === '') return
   const { config } = parseConfigJson(raw)
-  const res = await saveGatherConfig(instanceIndex, accounts, config)
   try {
-    window.localStorage.removeItem(localKey(instanceIndex))
-  } catch {
-    // 清不掉无所谓：账号里那份已经是权威的了，下次 loadGatherConfig 也优先读账号。
-  }
-  return {
-    accounts: res.accounts,
-    message: `本机存的采集配置已搬到账号「${account.name}」，以后跟着账号走。`
+    const res = await saveGatherConfig(instanceIndex, accounts, config)
+    if (res.accounts) setAccounts(res.accounts)
+    try {
+      window.localStorage.removeItem(localKey(instanceIndex))
+    } catch {
+      // 清不掉无所谓：账号里那份已经是权威的了，loadGatherConfig 也优先读账号。
+    }
+    toast().info(`本机存的采集配置已搬到账号「${account.name}」，以后跟着账号走。`)
+  } catch (e) {
+    // 搬不动不算绑定失败：绑定已经生效了，只是配置还留在本机。说清楚就行。
+    toast().warning(
+      `账号已绑定，但本机存的采集配置没能搬过去：${e instanceof Error ? e.message : String(e)}。` +
+        '打开采集配置点一次「保存」即可把它写进账号。'
+    )
   }
 }
 

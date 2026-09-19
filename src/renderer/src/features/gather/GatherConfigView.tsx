@@ -70,12 +70,15 @@ export interface GatherConfigViewProps {
   embedded?: boolean
   /** 保存成功后回调 —— 抽屉靠它刷新入口上的角标。 */
   onSaved?: (instanceIndex: number) => void
+  /** 有没有未保存的修改。抽屉靠它在关闭前拦一道，别让改了半天的配置无声消失。 */
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 export default function GatherConfigView({
   index,
   embedded = false,
-  onSaved
+  onSaved,
+  onDirtyChange
 }: GatherConfigViewProps = {}): React.JSX.Element {
   const instances = useAppStore((s) => s.instances)
   const accounts = useAppStore((s) => s.accounts)
@@ -105,6 +108,11 @@ export default function GatherConfigView({
   useEffect(() => {
     void loadSched()
   }, [loadSched])
+
+  // 把「有未保存的修改」抬给外面（抽屉要据此决定关不关）。
+  useEffect(() => {
+    onDirtyChange?.(dirty)
+  }, [dirty, onDirtyChange])
 
   // 换实例时重新载入这个实例的配置。
   useEffect(() => {

@@ -11,12 +11,18 @@
  * 所以这里不做异步、不缓存，跟着 instances / accounts 变就重算。
  * 保存完调 refresh()：未绑账号的实例配置落在 localStorage，accounts 不变、
  * 光靠依赖数组推不出来。
+ *
+ * ★ 「问题」的判据是**这个实例被要求去采集、但配置上它其实采不了**。
+ *   不能把「没绑账号」一律算成问题 —— 本机六个实例里只有两个在跑，还有一个是只用来克隆的
+ *   基础实例，那样页头那个数字永远归不了零，角标就退化成常亮装饰、再也没人看。
+ *   自动调度没开的实例，面板本来就不会碰它，不该报问题。
  */
 
 import { useCallback, useMemo, useState } from 'react'
 import { useAppStore } from '@/store/appStore'
 import { hasBlockingIssue, validateGatherConfig } from './config'
 import { loadGatherConfig } from './configStorage'
+import { useMarchStore } from './marchStore'
 
 export interface GatherConfigBadge {
   /** 采集总开关（配置里的 enabled）。主进程只认绑定账号里存的那份。 */
@@ -31,10 +37,15 @@ export interface GatherConfigBadge {
   text: string
 }
 
-/** 算一个实例的角标。导出是为了让自检和别处的单点使用不必再抄一遍判据。 */
+/**
+ * 算一个实例的角标。导出是为了让自检和别处的单点使用不必再抄一遍判据。
+ * @param autoOn 这个实例的自动调度开着没有。关着时「没绑账号 / 总开关没开」不算问题
+ *               （面板根本不会去碰它）；配置校验错误仍然报，那是配置本身坏了。
+ */
 export function describeGatherConfigBadge(
   instanceIndex: number,
-  accounts: Parameters<typeof loadGatherConfig>[1]
+  accounts: Parameters<typeof loadGatherConfig>[1],
+  autoOn: boolean
 ): GatherConfigBadge {
   const loaded = loadGatherConfig(instanceIndex, accounts)
   const issues = validateGatherConfig(loaded.config)
@@ -57,8 +68,11 @@ export function describeGatherConfigBadge(
       enabled,
       bound,
       errors,
-      tone: 'warning',
-      text: '这个实例还没绑定账号。主进程只从绑定账号里读采集配置，现在这份只存在本机。'
+      tone: autoOn ? 'warning' : null,
+      text: autoOn
+        ? '自动调度开着，但这个实例没绑账号 —— 主进程只从绑定账号里读采集配置，' +
+          '所以它只会定时读面板、不会派兵。先在「绑定账号」列选一个账号。'
+        : '这个实例还没绑账号，自动调度也没开，面板不会碰它。要用它采集的话先绑个账号。'
     }
   }
   if (!enabled) {
@@ -66,8 +80,10 @@ export function describeGatherConfigBadge(
       enabled,
       bound,
       errors,
-      tone: 'warning',
-      text: '采集总开关没打开，不会派兵。点开展开配置，打开总开关并保存。'
+      tone: autoOn ? 'warning' : null,
+      text: autoOn
+        ? '自动调度开着，但采集配置里的总开关是关的，不会派兵。点开打开总开关并保存。'
+        : '采集总开关没打开。点开可以配置，配好后再开自动调度。'
     }
   }
   return {
@@ -91,16 +107,22 @@ export interface GatherConfigBadges {
 export function useGatherConfigBadges(): GatherConfigBadges {
   const instances = useAppStore((s) => s.instances)
   const accounts = useAppStore((s) => s.accounts)
+  // 自动调度开没开是调度器那边的状态，两个页面本来就订阅着它。
+  const byInstance = useMarchStore((s) => s.byInstance)
   const [nonce, setNonce] = useState(0)
 
   const badges = useMemo(() => {
     const map: Record<number, GatherConfigBadge> = {}
     for (const inst of instances) {
-      map[inst.index] = describeGatherConfigBadge(inst.index, accounts)
+      map[inst.index] = describeGatherConfigBadge(
+        inst.index,
+        accounts,
+        byInstance[inst.index]?.auto === true
+      )
     }
     return map
     // nonce 只是「重算一次」的开关，故意进依赖数组。
-  }, [instances, accounts, nonce])
+  }, [instances, accounts, byInstance, nonce])
 
   const problemCount = useMemo(
     () => Object.values(badges).filter((b) => b.tone !== null).length,

@@ -97,7 +97,7 @@ export {
   loadGatherConfig,
   saveGatherConfig,
   hasLocalGatherConfig,
-  migrateLocalConfigToAccount,
+  afterAccountBind,
   exportGatherConfig,
   importGatherConfig,
   GATHER_PARAM_SCOPE,

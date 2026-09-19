@@ -65,10 +65,13 @@ export function InstanceDiagnosticsBadge({
 
   const count = attentionCount(items)
   const tone = worst === 'error' ? 'var(--wl-danger)' : 'var(--wl-warning)'
+  // ★ 只承诺抽屉里真有的东西：处置建议与现场截图只有「被异常暂停」时才存在。
   const tip =
     count > 0
-      ? `${count} 条需要处理：${items.find((i) => i.level !== 'info')?.title ?? ''}。点开查看原因、处置建议与现场截图。`
-      : '有几条说明，点开查看。'
+      ? `${count} 条需要处理：${items.find((i) => i.level !== 'info')?.title ?? ''}。点开查看${
+          pause.paused ? '原因、处置建议与现场截图' : '完整原因'
+        }。`
+      : '有几条说明（不用动手），点开查看。'
 
   return (
     <>

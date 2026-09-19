@@ -23,7 +23,7 @@ import type { Account } from '@shared/domain'
 import { makeId } from '@shared/defaults'
 import { call, toast, tryCall } from '@/ipc/useIpc'
 import { isInstanceUp, useAppStore } from '@/store/appStore'
-import { migrateLocalConfigToAccount } from '@/features/gather'
+import { afterAccountBind } from '@/features/gather'
 
 /** 下拉里的两个特殊项。账号 id 都是 `acc_` 前缀，不会撞。 */
 const NONE = '__none__'
@@ -54,22 +54,10 @@ export default function InstanceAccountCell({
   const [createOpen, setCreateOpen] = useState(false)
   const [newName, setNewName] = useState('')
 
-  /** 绑定成功后的收尾：更新账号列表 + 把本机那份采集配置搬进账号。 */
+  /** 绑定成功后的收尾。搬配置那段与账号页共用 afterAccountBind，两个入口行为必须一样。 */
   const afterBind = async (list: Account[]): Promise<void> => {
     setAccounts(list)
-    try {
-      const moved = await migrateLocalConfigToAccount(instanceIndex, list)
-      if (moved) {
-        if (moved.accounts) setAccounts(moved.accounts)
-        toast().info(moved.message)
-      }
-    } catch (e) {
-      // 搬不动不算绑定失败：绑定已经生效了，只是配置还留在本机。说清楚就行。
-      toast().warning(
-        `账号已绑定，但本机存的采集配置没能搬过去：${e instanceof Error ? e.message : String(e)}。` +
-          '到采集配置里点一次「保存」即可把它写进账号。'
-      )
-    }
+    await afterAccountBind(instanceIndex, list, setAccounts)
     onChanged?.(instanceIndex)
   }
 
@@ -78,8 +66,17 @@ export default function InstanceAccountCell({
     try {
       const list = await tryCall('account:bind', accountId, index)
       if (list) {
-        toast().success(index === null ? '已解除绑定' : `已绑定到实例 ${index}`)
-        await afterBind(list)
+        if (index === null) {
+          // ★ 说清配置去哪了：解绑后采集配置仍留在账号里，界面上却会显示成默认值
+          //   （主进程与本页都只从绑定账号读配置），不说的话看起来就像被清空了。
+          const name = accounts.find((a) => a.id === accountId)?.name ?? '该账号'
+          toast().success(`已解除绑定。采集配置仍留在账号「${name}」里，绑回它就会回来。`)
+          setAccounts(list)
+          onChanged?.(instanceIndex)
+        } else {
+          toast().success(`已绑定到实例 ${index}`)
+          await afterBind(list)
+        }
       }
     } finally {
       setBusy(false)

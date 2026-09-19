@@ -83,9 +83,11 @@ function describeStatus(
     }
   }
   const sampled = state.lastSampledAt > 0
-  if (sampled && !state.lastSampleOk) {
+  // ★ 没加 sampled 前置：从没成功采过一次时 lastSampledAt 恒为 0，
+  //   加了它这行就会显示成「未采样」，把「一直在失败」说成「还没开始」。
+  if (!state.lastSampleOk && state.error) {
     return {
-      text: `上次采样失败（${formatAgo(now - state.lastSampledAt)}）`,
+      text: sampled ? `上次采样失败（${formatAgo(now - state.lastSampledAt)}）` : '一直没能采样成功',
       tone: 'danger',
       tip: '点旁边的角标查看完整错误原因。'
     }

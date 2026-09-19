@@ -77,9 +77,17 @@ export function collectDiagnostics({
     })
   }
 
-  // ② 上次采样失败。采过（lastSampledAt > 0）才说这句 —— 从没采过不是失败。
-  if (state.lastSampledAt > 0 && !state.lastSampleOk && state.error) {
-    items.push({ level: 'error', title: '上次采样失败', text: state.error })
+  // ② 采样失败。
+  // ★ 判据是「有错误原因」，**不能**加 lastSampledAt > 0：采样失败那条路只写 lastSampleOk/error，
+  //   不动 lastSampledAt（src/main/scheduler/index.ts）。所以「从来没成功采过一次」的实例
+  //   lastSampledAt 恒为 0 —— 加了那个前置，adb 未授权 / 游戏不在主界面这类一上来就失败的情况
+  //   会一条提示都不显示，卡片只说「尚未采样」，用户以为还没开始，其实是在反复失败。
+  if (!state.lastSampleOk && state.error) {
+    items.push({
+      level: 'error',
+      title: state.lastSampledAt > 0 ? '上次采样失败' : '一直没能采样成功',
+      text: state.error
+    })
   }
 
   // ③ 采样告警：识别不确定、行数对不上之类。每次采样覆盖，所以这里是「本轮」的说法。
