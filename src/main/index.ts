@@ -1107,10 +1107,29 @@ async function aiAssistForRun(req: AiAssistRequest): Promise<AiAssistResult> {
 /** 每日数据统计：所有事件源（派兵 / 失败 / 回城 / 告警 / 暂停恢复 / 快照）都汇到它的 record()。 */
 const statsCenter = getStatsCenter()
 
+/**
+ * 面板级日志（采集流程 / 调度器 / 告警 / 卡死看门狗都走它）。
+ *
+ * ★ warn 与 error **必须落盘**到 app.ndjson：打包后的 Windows 程序是 GUI 子系统，
+ *   console 输出没有任何地方可去。2026-09-18 真机故障就吃了这个亏 ——
+ *   采集卡在搜索页，错误文案里明明写着「dig_panel_level 字形集是否齐全」，
+ *   但用户和排查的人都看不到，只能靠离线跑一遍视觉才定位出来。
+ *   debug/info 量大（每轮几十条），仍然只打 console，不写盘。
+ */
 function alertLog(level: LogLevel, message: string, data?: Record<string, unknown>): void {
   const line = `[alerts] ${message}${data ? ' ' + JSON.stringify(data) : ''}`
   if (level === 'error' || level === 'warn') console.warn(line)
   else console.log(line)
+  if (level !== 'warn' && level !== 'error') return
+  void appendAppLog(paths().logsDir, {
+    ts: Date.now(),
+    level,
+    runId: null,
+    instanceIndex: null,
+    scope: 'gather',
+    message,
+    data
+  }).catch(() => undefined)
 }
 
 const failureTracker = new FailureTracker({

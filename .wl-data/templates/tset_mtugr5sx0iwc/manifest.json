@@ -3359,7 +3359,61 @@
       "note": "AI 自学（scheduler-sample，置信 0.95，模型 qwen3.8-flash）：活动弹窗，右上角有明确的关闭按钮",
       "createdAt": 1789493436256,
       "updatedAt": 1789493436256
+    },
+    {
+      "id": "dig_panel_level_0",
+      "name": "等级数字-0",
+      "file": "dig_panel_level_0.png",
+      "authoredWidth": 2560,
+      "authoredHeight": 1440,
+      "bounds": {
+        "x": 2356,
+        "y": 834,
+        "w": 20,
+        "h": 30
+      },
+      "defaultRoi": {
+        "x": 200,
+        "y": 820,
+        "w": 2200,
+        "h": 60
+      },
+      "std": 74.2,
+      "tags": [
+        "digit",
+        "dig_panel_level"
+      ],
+      "note": "搜索面板『等级 N』数字，浅粉底黑字。2026-09-18 补：滑杆上限涨到 10 后缺 0/9 两张字形，等级读不出来导致卡在搜索页。",
+      "createdAt": 1789785012254,
+      "updatedAt": 1789785012254
+    },
+    {
+      "id": "dig_panel_level_9",
+      "name": "等级数字-9",
+      "file": "dig_panel_level_9.png",
+      "authoredWidth": 2560,
+      "authoredHeight": 1440,
+      "bounds": {
+        "x": 2302,
+        "y": 834,
+        "w": 20,
+        "h": 30
+      },
+      "defaultRoi": {
+        "x": 200,
+        "y": 820,
+        "w": 2200,
+        "h": 60
+      },
+      "std": 69.9,
+      "tags": [
+        "digit",
+        "dig_panel_level"
+      ],
+      "note": "搜索面板『等级 N』数字，浅粉底黑字。2026-09-18 补：滑杆上限涨到 10 后缺 0/9 两张字形，等级读不出来导致卡在搜索页。",
+      "createdAt": 1789785012447,
+      "updatedAt": 1789785012447
     }
   ],
-  "updatedAt": 1789493436256
+  "updatedAt": 1789785012447
 }

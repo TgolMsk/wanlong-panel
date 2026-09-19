@@ -10,7 +10,14 @@ import { DEFAULT_SHRINK } from '@shared/constants'
 import { AppError } from '@shared/errors'
 import type { Point, PreparedTemplate, RawFrame, Rect } from '@shared/vision'
 import { matchIn, prepareFrame } from '@vision/index'
-import { CARD, FIXED_TAP, GAME_PACKAGE, POPUP_CLOSE_ROI, offsetPoint } from './geometry'
+import {
+  CARD,
+  FIXED_TAP,
+  GAME_PACKAGE,
+  POPUP_CLOSE_ROI,
+  SEARCH_PANEL,
+  offsetPoint
+} from './geometry'
 import type { GatherSession } from './session'
 import { TPL, type GatherTemplates } from './templates'
 
@@ -97,6 +104,21 @@ export async function closeResourceCard(s: GatherSession): Promise<void> {
 export async function closeTroopPanel(s: GatherSession): Promise<void> {
   const title = await s.matchOptional(TPL.panelTitleTroop, undefined)
   if (!title || !title.found) return
+  await s.key('BACK', 800)
+  await dismissNoticeDialog(s)
+}
+
+/**
+ * 关掉搜索面板（开着就按一次 BACK）。
+ *
+ * ★ 2026-09-18 加：本轮失败时如果不关它，游戏就**停在搜索页**不动了 ——
+ *   用户看到的是「卡在搜索页面」，其实每 5 分钟都在退避重试，只是界面没退回去。
+ *   下一轮的 G0 虽然能把界面拉回世界地图，但中间这几分钟里游戏挂在子页面上，
+ *   人看一眼根本不知道发生了什么。收尾动作失败无所谓，吞掉即可。
+ */
+export async function closeSearchPanel(s: GatherSession): Promise<void> {
+  const btn = await s.matchOptional(TPL.btnSearch, SEARCH_PANEL.anchorRoi)
+  if (!btn || !btn.found) return
   await s.key('BACK', 800)
   await dismissNoticeDialog(s)
 }

@@ -37,6 +37,7 @@ import {
   WORLD_MAP_TEMPLATES,
   closeResourceCard,
   closeTroopPanel,
+  closeSearchPanel,
   ensureWorldMap
 } from './navigation'
 import {
@@ -295,9 +296,13 @@ export async function runGatherCycle(opts: RunGatherCycleOptions): Promise<Gathe
   }
 
   // 收尾：尽量把游戏留在世界地图（失败不影响结果）。
+  // ★ 搜索面板也要关：本轮在 G6/G7 失败时游戏正停在搜索页，不关它就会一直挂在那个子页面上，
+  //   用户看到的就是「卡在搜索页面不动」（2026-09-18 真机反馈）。
   try {
-    if (error?.code !== 'GAME_UPDATE_REQUIRED' && error?.code !== 'AI_RISK_BLOCKED')
+    if (error?.code !== 'GAME_UPDATE_REQUIRED' && error?.code !== 'AI_RISK_BLOCKED') {
       await closeTroopPanel(s)
+      await closeSearchPanel(s)
+    }
   } catch {
     // 收尾动作失败无所谓，下一轮的 G0 会把界面拉回来。
   }
