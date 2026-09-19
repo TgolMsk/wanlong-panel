@@ -1,6 +1,6 @@
 {
   "name": "wanlong-panel",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "description": "MuMu 多实例控制面板 —— 截图 + 模板匹配的多账号自动化地基",
   "author": "wanlongjs",
