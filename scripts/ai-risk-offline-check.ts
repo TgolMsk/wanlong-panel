@@ -239,6 +239,30 @@ try {
     body({ ...low, effect: 'delete' }, { action: 'none', target: null })
   ])
   assert.equal(mislabeledNone.result.requiresAttention, true)
+
+  // ★ 2026-09-18 真机：派完兵后一个半透明引导气泡盖在世界地图上，G0 认不出 → 问 AI →
+  //   AI 答「这本来就是世界地图，气泡没有 × 可关，强行点反而偏离主界面」→ 被判风险未通过 →
+  //   实例被暂停等人处理。back / none 本函数根本不会去点，拿一个不会发生的点击的风险去暂停实例，
+  //   是把安全闸门用错了地方。模型认出是主界面时必须交回兜底阶梯，而不是暂停。
+  for (const screen of ['world_map', 'city', 'troop_panel']) {
+    const onMain = await run([
+      body({ ...low, level: 'high', effect: 'delete' }, { action: 'none', target: null, screen })
+    ])
+    assert.equal(
+      onMain.result.requiresAttention,
+      false,
+      `none on ${screen} must not pause the instance`
+    )
+    assert.equal(onMain.result.outcome, 'no_action')
+    assert.equal(onMain.taps.length, 0)
+  }
+  // 但顶号 / 看不出来这类仍然要暂停 —— 那才是闸门该拦的。
+  for (const screen of ['kicked', 'maintenance', 'unknown']) {
+    const risky = await run([
+      body({ ...low, level: 'high', effect: 'delete' }, { action: 'none', target: null, screen })
+    ])
+    assert.equal(risky.result.requiresAttention, true, `none on ${screen} must still pause`)
+  }
   for (const screen of ['kicked', 'unknown']) {
     const ambiguous = await run([body(low, { screen })])
     assert.equal(ambiguous.result.requiresAttention, true)

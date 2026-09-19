@@ -418,6 +418,10 @@ npm run check:alerts    # 174 项断言，不碰模拟器、不发真实网络�
 
 1. **动作白名单只有 tap_close / tap_cancel / back / none，且只执行前两种。** back / none 交回调用方自己的 BACK 阶梯 ——
    「BACK 之后必须取消退出框」这条安全逻辑只能写一份。绝不给白名单加「确定」「派兵」之类的动作。
+   ★ **back / none + 模型说是主界面（world_map / city / troop_panel）时不许升级成「需要人处理」。**
+   这两个动作本来就不会点，risk 描述的是模型**假想**中那一下点击的后果；拿一个不会发生的点击去暂停实例，
+   是把闸门用错了地方（2026-09-18 真机：引导气泡盖在世界地图上 → G0 认不出 → AI 说「这就是主界面别乱点」
+   → 实例被暂停）。顶号 / 维护公告 / 看不出来这些仍然要暂停。
 2. **点完必须复验。** 画面没变（shrink=4 平均绝对差 < 6）当没发生；变了但 `recognize()` 认不出只算 `applied`；
    只有回到已知界面（`isRecognizableScreen`）才算 `verified`、才允许自学模板。
 3. **自学模板走 `@vision/store.saveTemplate`**（方差守卫 / 原子写），id 是 `tpl_btn_close_popup` 或 `_ai<N>`（≤ 8 张），

@@ -14,7 +14,7 @@
  * 纯 Node，不 import electron。设备操作走 RecoverIo（参考坐标），采集流程的 GatherIo 天然满足它。
  */
 
-import type { AiAdvice, AiConsultOutcome } from '@shared/ai'
+import type { AiAdvice, AiConsultOutcome, AiScreenKind } from '@shared/ai'
 import { AI_ACTION_LABEL } from '@shared/ai'
 import { AppError } from '@shared/errors'
 import type { AndroidKey } from '@shared/script'
@@ -68,6 +68,16 @@ export interface RecoverResult {
   outcome: AiConsultOutcome
   message: string
   requiresAttention?: boolean
+}
+
+/**
+ * 模型说的这个界面是不是「流程本来就认识、待着不动也没事」的主界面。
+ *
+ * 只有这三类算：世界地图 / 城内 / 部队管理面板。顶号、维护公告、网络断开、看不出来
+ * 这些仍然要暂停等人 —— 那才是安全闸门该拦的东西。
+ */
+function isMainScreen(screen: AiScreenKind): boolean {
+  return screen === 'world_map' || screen === 'city' || screen === 'troop_panel'
 }
 
 /** 点击后等画面稳定的时间。 */
@@ -137,7 +147,14 @@ export async function aiRecoverUnknownScreen(
         advice.risk &&
         (advice.risk.level !== 'low' ||
           advice.risk.hazards.length ||
-          !isLowEffect(advice.risk.effect))
+          !isLowEffect(advice.risk.effect)) &&
+        // ★ 例外：模型说「这本来就是主界面、不用动」时**不要**升级成「需要人处理」。
+        //   back / none 这两个动作本函数根本不会去点，risk 描述的是它**假想**中那一下点击的后果；
+        //   拿一个不会发生的点击的风险，把实例暂停掉，是把安全闸门用错了地方。
+        //   2026-09-18 真机：派完兵后一个半透明功能引导气泡盖在世界地图上，G0 认不出 → 问 AI →
+        //   AI 答「画面主体就是世界地图，气泡没有 × 可关，强行点反而偏离主界面」→ 却被判成
+        //   风险未通过 → 实例暂停等人处理。正确的处置是交回兜底阶梯：下一帧气泡自己就没了。
+        !isMainScreen(advice.screen)
       ) {
         return finish(
           'rejected',
