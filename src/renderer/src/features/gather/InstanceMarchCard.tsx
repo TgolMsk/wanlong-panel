@@ -1,17 +1,22 @@
 /**
- * 一个实例一张毛玻璃卡：卡头是实例名 / 账号 / 在线状态 / 队列 N/M，卡身是每支队伍一行，
- * 卡脚是采样新鲜度 + 下一次唤醒 + 手动操作。
+ * 一个实例一张毛玻璃卡：卡头是实例名 / 账号 / 在线状态 / 队列 N/M + 诊断角标，
+ * 卡身是每支队伍一行，卡脚是采样新鲜度 + 下一次唤醒 + 手动操作。
+ *
+ * ★ 报错 / 提醒 / 暂停原因**不再常驻卡身**，全部收进卡头的诊断角标（点开才展开）——
+ *   挂机时十张卡的红条会把真正要看的倒计时挤到屏幕外。但两件事必须留在外面：
+ *   ① 暂停时整张卡的红框（唯一剩下的严重性信号）② 卡脚的「恢复」按钮（要点一下才继续干活）。
  */
 
 import React from 'react'
-import { Button, Switch, Tooltip } from 'antd'
-import { ReloadOutlined } from '@ant-design/icons'
+import { Badge, Button, Popconfirm, Switch, Tooltip } from 'antd'
+import { PlayCircleOutlined, ReloadOutlined, SlidersOutlined } from '@ant-design/icons'
 import type { Account, MumuInstance } from '@shared/domain'
 import { freeQueueSlots, type InstanceQueueState } from '@shared/scheduler'
-import type { InstancePauseState } from '@shared/alerts'
-import { PauseBanner } from '@/features/alerts'
+import { emptyPauseState, type InstancePauseState } from '@shared/alerts'
 import { formatAgo, formatClock, formatShort } from './present'
 import { MarchRow } from './MarchRow'
+import { InstanceDiagnosticsBadge } from './InstanceDiagnosticsBadge'
+import type { GatherConfigBadge } from './useGatherConfigBadges'
 
 /** 队列徽章。读的是「部队管理」面板右上角的 N/M（实测 4/5）。卡头与实例列表的「自动采集」列共用。 */
 export function QueueBadge({ state }: { state: InstanceQueueState }): React.JSX.Element {
@@ -53,16 +58,20 @@ export interface InstanceMarchCardProps {
   /** 正在采样（按钮转圈 + 禁用）。 */
   sampling: boolean
   /**
-   * 异常暂停态。`paused === true` 时整张卡标红并在最上面顶一条红条。
+   * 异常暂停态。`paused === true` 时整张卡标红，原因进卡头的诊断角标，卡脚多出「恢复」按钮。
    * ★ 判据是它，**不是 `!auto`** —— 用户自己手动关掉自动调度也会让 auto 为 false，
-   *   那是正常操作，不该标红。没接线时传 null 即可，卡片与从前完全一样。
+   *   那是正常操作，不该标红。没接线时传 null 即可。
    */
   pause?: InstancePauseState | null
-  /** 正在恢复（红条上的按钮转圈 + 防连点）。 */
+  /** 正在恢复（「恢复」按钮转圈 + 防连点）。 */
   resuming?: boolean
   onResume?: (instanceIndex: number) => void
   onSample: (instanceIndex: number) => void
   onToggleAuto: (instanceIndex: number, enabled: boolean) => void
+  /** 采集配置健康度，决定卡脚「配置」按钮上挂不挂角标。没接线时传 null。 */
+  badge?: GatherConfigBadge | null
+  /** 就地展开这个实例的采集配置抽屉。 */
+  onOpenConfig?: (instanceIndex: number) => void
 }
 
 export function InstanceMarchCard({
@@ -77,7 +86,9 @@ export function InstanceMarchCard({
   resuming,
   onResume,
   onSample,
-  onToggleAuto
+  onToggleAuto,
+  badge,
+  onOpenConfig
 }: InstanceMarchCardProps): React.JSX.Element {
   const paused = pause?.paused === true
   const online = instance.state === 'running' && instance.adb === 'connected'
@@ -122,6 +133,15 @@ export function InstanceMarchCard({
           </div>
         </div>
         <QueueBadge state={state} />
+        <InstanceDiagnosticsBadge
+          instance={instance}
+          state={state}
+          pause={pause ?? emptyPauseState(instance.index)}
+          resuming={resuming}
+          onResume={(i) => onResume?.(i)}
+          imminentMs={imminentMs}
+          staleAfterMs={staleAfterMs}
+        />
       </header>
 
       <div className="wlg-card-body">
@@ -130,37 +150,6 @@ export function InstanceMarchCard({
             设备操作正在收尾，自动派遣已关闭。
           </div>
         )}
-        {/* 被异常暂停时，红条永远顶在最上面 —— 这时候在途队伍是次要信息。 */}
-        {paused && pause && (
-          <PauseBanner
-            pause={pause}
-            instanceName={instance.name}
-            resuming={resuming}
-            onResume={(i) => onResume?.(i)}
-          />
-        )}
-
-        {state.error && (
-          <div className="wlg-empty">
-            <div className="wlg-empty-title" style={{ color: 'var(--wl-danger)' }}>
-              上次采样失败
-            </div>
-            <div className="wlg-empty-desc" style={{ color: 'var(--wl-danger)' }}>
-              {state.error}
-            </div>
-          </div>
-        )}
-
-        {state.warnings.length > 0 && (
-          <div className="wlg-empty" style={{ paddingBlock: 'var(--wl-space-3)' }}>
-            <div className="wlg-empty-desc" style={{ color: 'var(--wl-warning)' }}>
-              {state.warnings.map((w, i) => (
-                <div key={i}>提醒：{w}</div>
-              ))}
-            </div>
-          </div>
-        )}
-
         {rows.length > 0 ? (
           rows.map((m) => (
             <MarchRow
@@ -191,7 +180,7 @@ export function InstanceMarchCard({
           <Tooltip
             title={
               paused
-                ? '这个实例被异常暂停了，自动调度已经关掉。请用上面红条里的「恢复」按钮重新开启 —— 那条路会同时清掉暂停记录与推送冷却，直接扳这个开关不会。'
+                ? '这个实例被异常暂停了，自动调度已经关掉。请用旁边的「恢复」按钮重新开启 —— 那条路会同时清掉暂停记录与推送冷却，直接扳这个开关不会。暂停原因点卡头右上角的角标看。'
                 : '打开后，这个实例会在队列释放时自动被唤醒去派下一轮。关掉只保留倒计时展示，不会主动操作模拟器。'
             }
           >
@@ -224,23 +213,68 @@ export function InstanceMarchCard({
             </Tooltip>
           )}
         </div>
-        <Tooltip
-          title={
-            paused
-              ? '注意：这个实例已被异常暂停，但「立即采样」仍然会真的去操作模拟器读一次面板。游戏若还停在异常界面（登录页 / 公告框），这次采样多半也会失败。'
-              : '真的去开一次「部队管理」面板读当前状态。游戏在前台时单张截图约 750ms，一次采样十几张，请不要连点。'
-          }
-        >
-          <Button
-            size="small"
-            icon={<ReloadOutlined />}
-            loading={sampling || state.sampling}
-            disabled={sampling || state.sampling || state.operating}
-            onClick={() => onSample(state.instanceIndex)}
+        <div className="wlg-field-inline">
+          {paused && (
+            <Popconfirm
+              title="确认已经处理好现场了吗？"
+              description={
+                <span style={{ maxWidth: 300, display: 'inline-block' }}>
+                  恢复会重新打开实例 #{instance.index}（{instance.name}）的自动调度，并立刻去读一次
+                  「部队管理」面板。如果游戏还停在异常界面（登录页 / 公告框），多半会马上再次暂停。
+                </span>
+              }
+              okText="确认恢复"
+              cancelText="再看看"
+              onConfirm={() => onResume?.(instance.index)}
+            >
+              <Button
+                size="small"
+                type="primary"
+                icon={<PlayCircleOutlined />}
+                loading={resuming === true}
+              >
+                恢复
+              </Button>
+            </Popconfirm>
+          )}
+          <Tooltip
+            title={
+              paused
+                ? '注意：这个实例已被异常暂停，但「立即采样」仍然会真的去操作模拟器读一次面板。游戏若还停在异常界面（登录页 / 公告框），这次采样多半也会失败。'
+                : '真的去开一次「部队管理」面板读当前状态。游戏在前台时单张截图约 750ms，一次采样十几张，请不要连点。'
+            }
           >
-            立即采样
-          </Button>
-        </Tooltip>
+            <Button
+              size="small"
+              icon={<ReloadOutlined />}
+              loading={sampling || state.sampling}
+              disabled={sampling || state.sampling || state.operating}
+              onClick={() => onSample(state.instanceIndex)}
+            >
+              立即采样
+            </Button>
+          </Tooltip>
+          {onOpenConfig && (
+            <Tooltip title={badge?.text ?? '就地展开这个实例的采集配置（改完要点保存）。'}>
+              <Badge
+                dot={!!badge?.tone}
+                size="small"
+                style={{
+                  backgroundColor:
+                    badge?.tone === 'danger' ? 'var(--wl-danger)' : 'var(--wl-warning)'
+                }}
+              >
+                <Button
+                  size="small"
+                  icon={<SlidersOutlined />}
+                  onClick={() => onOpenConfig(instance.index)}
+                >
+                  配置
+                </Button>
+              </Badge>
+            </Tooltip>
+          )}
+        </div>
       </footer>
     </section>
   )

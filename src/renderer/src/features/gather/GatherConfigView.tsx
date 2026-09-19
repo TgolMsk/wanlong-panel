@@ -4,6 +4,10 @@
  * 逐项对应 resources/game-data/gather-config.schema.json（version = 2）。
  * 每一项都写清楚它是什么、调大调小分别付出什么代价 —— 使用者是玩家，不是读 schema 的人。
  *
+ * 两种形态（同一份表单，props 都是可选的，老的 <GatherConfigView /> 整页用法仍然合法）：
+ *   · 整页：不传 props，实例从 appStore.selectedInstance 来，页头有实例下拉
+ *   · 抽屉（GatherConfigDrawer）：传 index + embedded，页头收掉（抽屉标题已经写了是哪个实例）
+ *
  * ★ 全页最重要的一句话（在等级那一节还会再说一遍）：
  *   这里配的等级是**搜索下限**，不是目标等级。游戏返回的是「等级 >= 搜索值」的点，
  *   搜 5 跳到 7 是正常且更划算的结果，不是失败。
@@ -56,11 +60,29 @@ const ORIGIN_TEXT: Record<GatherConfigOrigin, string> = {
   default: '尚未保存过，当前是默认配置'
 }
 
-export default function GatherConfigView(): React.JSX.Element {
+export interface GatherConfigViewProps {
+  /**
+   * 只配这一个实例（抽屉形态）。
+   * 不传（undefined）= 沿用 appStore 的 selectedInstance，并显示页头的实例下拉。
+   */
+  index?: number | null
+  /** 嵌在抽屉里：收掉页头大标题与实例下拉，吸底操作条贴到抽屉 body 底边。 */
+  embedded?: boolean
+  /** 保存成功后回调 —— 抽屉靠它刷新入口上的角标。 */
+  onSaved?: (instanceIndex: number) => void
+}
+
+export default function GatherConfigView({
+  index,
+  embedded = false,
+  onSaved
+}: GatherConfigViewProps = {}): React.JSX.Element {
   const instances = useAppStore((s) => s.instances)
   const accounts = useAppStore((s) => s.accounts)
-  const selectedInstance = useAppStore((s) => s.selectedInstance)
+  const storeSelected = useAppStore((s) => s.selectedInstance)
   const selectInstance = useAppStore((s) => s.selectInstance)
+  // 受控（抽屉）时以 props 为准；下面整份逻辑照旧只认 selectedInstance 这一个名字。
+  const selectedInstance = index !== undefined ? index : storeSelected
   const setAccounts = useAppStore((s) => s.setAccounts)
   const refreshAccounts = useAppStore((s) => s.refreshAccounts)
 
@@ -208,6 +230,7 @@ export default function GatherConfigView(): React.JSX.Element {
       setOrigin(res.origin)
       setDirty(false)
       toast().success(res.message)
+      onSaved?.(selectedInstance)
     } catch (e) {
       // 不吞异常：把中文原因原样弹出来。
       toast().error(e instanceof Error ? e.message : String(e))
@@ -252,7 +275,8 @@ export default function GatherConfigView(): React.JSX.Element {
   const enabledResources = cfg.resources.filter((r) => r.enabled)
 
   return (
-    <div className="wlg-page wlg-cfg">
+    <div className={`wlg-page wlg-cfg${embedded ? ' wlg-cfg-embedded' : ''}`}>
+      {!embedded && (
       <div className="wlg-page-head">
         <div className="wlg-page-head-text">
           <h1 className="wl-title">自动采集配置</h1>
@@ -278,8 +302,9 @@ export default function GatherConfigView(): React.JSX.Element {
           />
         </div>
       </div>
+      )}
 
-      {selectedInstance === null && (
+      {selectedInstance === null && !embedded && (
         <Alert
           type="info"
           showIcon

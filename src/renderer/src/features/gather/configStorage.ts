@@ -189,6 +189,50 @@ export async function saveGatherConfig(
   }
 }
 
+/** 本机存储里有没有这个实例的采集配置（未绑账号时保存会落在这里）。 */
+export function hasLocalGatherConfig(instanceIndex: number): boolean {
+  const { raw } = readLocal(instanceIndex)
+  return typeof raw === 'string' && raw.trim() !== ''
+}
+
+/**
+ * 刚给实例绑上账号时，把本机存的那份采集配置搬到账号里。
+ *
+ * ★ 为什么必须搬：未绑账号时保存的配置落在 localStorage，而**主进程只从绑定账号里读配置**。
+ *   不搬的话，用户在实例列表里一绑账号，界面上的配置就会「变回默认值」——
+ *   看起来像面板把设置弄丢了（2026-09-18 那次「本地有配置了却搜不到」就是这种困惑）。
+ *
+ * 只在账号里**还没有**采集配置时搬，绝不覆盖账号上已有的那份（那是更权威的一份）。
+ * 搬完清掉本机那份，避免下次解绑又读到一份过期的。
+ *
+ * @returns null = 没东西可搬（本机没存 / 账号已有配置 / 没绑上账号）；否则带中文说明。
+ */
+export async function migrateLocalConfigToAccount(
+  instanceIndex: number,
+  accounts: readonly Account[]
+): Promise<{ accounts: Account[] | null; message: string } | null> {
+  const account = accounts.find((a) => a.instanceIndex === instanceIndex) ?? null
+  if (!account) return null
+
+  const existing = account.scriptParams?.[GATHER_PARAM_SCOPE]?.[GATHER_PARAM_KEY]
+  if (typeof existing === 'string' && existing.trim() !== '') return null
+
+  const { raw } = readLocal(instanceIndex)
+  if (typeof raw !== 'string' || raw.trim() === '') return null
+
+  const { config } = parseConfigJson(raw)
+  const res = await saveGatherConfig(instanceIndex, accounts, config)
+  try {
+    window.localStorage.removeItem(localKey(instanceIndex))
+  } catch {
+    // 清不掉无所谓：账号里那份已经是权威的了，下次 loadGatherConfig 也优先读账号。
+  }
+  return {
+    accounts: res.accounts,
+    message: `本机存的采集配置已搬到账号「${account.name}」，以后跟着账号走。`
+  }
+}
+
 /** 导出成便于粘贴/备份的 JSON 文本。 */
 export function exportGatherConfig(config: GatherConfig): string {
   return JSON.stringify(config, null, 2)

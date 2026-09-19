@@ -294,7 +294,7 @@ export default function AccountsView(): React.JSX.Element {
           showIcon
           style={{ marginBottom: 'var(--wl-space-3)' }}
           message="一个实例同时只能绑一个账号"
-          description="把某个实例绑给新账号时，原来占着它的账号会自动解绑。多账号并发跑脚本时，请让每个账号绑到不同实例。"
+          description="把某个实例绑给新账号时，原来占着它的账号会自动解绑。多账号并发跑脚本时，请让每个账号绑到不同实例。「模拟器实例」页的「绑定账号」列也能直接改绑，与这里是同一条通道、效果完全一样。"
         />
         <Table<Account>
           size="small"

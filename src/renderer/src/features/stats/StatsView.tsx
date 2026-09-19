@@ -292,7 +292,6 @@ export default function StatsView(): React.JSX.Element {
     <div className="wls-page">
       <div className="wls-page-head">
         <div className="wls-page-head-text">
-          <h1 className="wl-title">数据统计</h1>
           <span className="wl-label">
             按北京时间每天 0 点分桶。预计采集量来自派兵时读到的卡片储量（按「自动采集至清空」估算）。
           </span>

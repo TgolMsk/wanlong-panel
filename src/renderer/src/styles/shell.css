@@ -38,13 +38,24 @@
   padding: var(--wl-space-3) var(--wl-space-6);
   color: var(--wl-text-tertiary);
   font-size: var(--wl-fs-micro);
+  flex-shrink: 0;
 }
+/*
+ * 七个一级入口 + 底部版本号那一行，在 150% 缩放的 1080p 上比可视高度还高，
+ * 所以菜单区自己滚、上下两块钉住。
+ * ★ min-height: 0 是关键：flex 子项默认 min-height:auto，不加它根本不会收缩，也就不会出现滚动条。
+ */
 .wl-shell .wl-main-menu {
   background: transparent;
   border-inline-end: none;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .wl-main-menu .ant-menu-item {
-  margin-bottom: var(--wl-space-2);
+  /* 5 项时是 space-2；7 项时收到 space-1，正好腾出底部版本号那一行。 */
+  margin-bottom: var(--wl-space-1);
 }
 .wl-sidebar-bottom {
   margin-top: auto;
@@ -54,10 +65,38 @@
   justify-content: space-between;
   align-items: center;
   gap: var(--wl-space-2);
+  flex-shrink: 0;
 }
 .wl-sidebar-note {
   color: var(--wl-text-secondary);
   font-size: var(--wl-fs-micro);
+}
+/* 侧栏左下角的版本号按钮（features/update/SidebarUpdate）。样式照 .wl-section-nav button。 */
+.wl-sidebar-version {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--wl-space-2);
+  border: 1px solid transparent;
+  border-radius: var(--wl-radius-sm);
+  padding: var(--wl-space-1) var(--wl-space-2);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+.wl-sidebar-version:hover {
+  background: var(--wl-bg-surface-hover);
+}
+.wl-sidebar-version:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: 2px;
+}
+/* 有新版本时的小红点。检查失败不亮 —— 理由见 updateStore.hasPendingUpdate。 */
+.wl-sidebar-version-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wl-danger);
+  flex-shrink: 0;
 }
 .wl-shell .wl-workspace {
   min-width: 0;
@@ -123,9 +162,12 @@
   justify-content: center;
   padding-inline: 0;
 }
+/* 收起态只有 72px 宽，减掉左右 padding 只剩 56px，横排放不下版本号 + 收起按钮两个控件。 */
 .wl-sidebar-collapsed .wl-sidebar-bottom {
   justify-content: center;
   padding-inline: var(--wl-space-2);
+  flex-direction: column;
+  gap: var(--wl-space-1);
 }
 .wl-instance-toolbar {
   display: flex;

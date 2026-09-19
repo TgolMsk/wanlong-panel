@@ -12,6 +12,9 @@
  * 「自动采集」列（2026-09-17 加）：每行一个开关 + 「采样」按钮，右上角「批量采集」菜单对当前筛选出的实例
  * 一键全开 / 全关 / 全采样。它走的是 features/gather 里与「采集总览」页**同一套**仓库与通道
  * （scheduler:setAuto / scheduler:sample / alerts:resume），这里不另存任何状态。
+ *
+ * 「绑定账号」列可以**直接改绑**（InstanceAccountCell），不必再切到「账号管理」页；
+ * 「更多 → 采集配置」也是就地展开右侧抽屉，不跳页。两处都靠 useGatherConfigBadges 出角标。
  */
 
 import { useEffect, useMemo, useState } from 'react'
@@ -74,10 +77,12 @@ import { AdbStateTag, InstanceStateTag, RunStatusTag, SemanticTag } from '../com
 import GlassCard from '../components/GlassCard'
 import PreviewPane from './PreviewPane'
 import AccountLoginDrawer from './AccountLoginDrawer'
+import InstanceAccountCell from './InstanceAccountCell'
 import {
+  GatherConfigDrawer,
   InstanceGatherControls,
   describeBatchOutcome,
-  loadGatherConfig,
+  useGatherConfigBadges,
   useInstanceGather
 } from '../features/gather'
 
@@ -170,14 +175,10 @@ export default function InstancesView(): React.JSX.Element {
     const timer = setInterval(() => setNow(Date.now()), 10_000)
     return () => clearInterval(timer)
   }, [])
-  // 每个实例的采集配置总开关。主进程只认绑定账号里存的那份；未绑定的实例读到的是本机存储，只用来提示。
-  const configEnabled = useMemo(() => {
-    const map: Record<number, boolean> = {}
-    for (const inst of instances) {
-      map[inst.index] = loadGatherConfig(inst.index, accounts).config.enabled
-    }
-    return map
-  }, [instances, accounts])
+  // 每个实例的采集配置健康度（总开关 / 有没有绑账号 / 校验错误）。与采集总览页共用一份判据。
+  const { badges: configBadges, refresh: refreshConfigBadges } = useGatherConfigBadges()
+  // 采集配置抽屉开在哪个实例上；null = 关着。
+  const [configDrawerFor, setConfigDrawerFor] = useState<number | null>(null)
 
   async function changeBase(index: number | null): Promise<void> {
     setBaseLoading(true)
@@ -389,9 +390,10 @@ export default function InstancesView(): React.JSX.Element {
   }
 
   // ── 一键采集：单个实例 ────────────────────────────────────────────────────
+  // 就地展开采集配置抽屉。★ 这里**不**调 selectInstance —— 开个配置不该把画面预览 /
+  // 模板页的选中项一起换掉。
   const openGatherConfig = (index: number): void => {
-    selectInstance(index)
-    setView('gatherConfig')
+    setConfigDrawerFor(index)
   }
 
   async function handleToggleAuto(index: number, enabled: boolean): Promise<void> {
@@ -542,15 +544,24 @@ export default function InstancesView(): React.JSX.Element {
     {
       title: '绑定账号',
       key: 'account',
-      width: 160,
+      width: 240,
       render: (_: unknown, r) => {
         const acc = accountOfInstance(accounts, r.index)
-        if (!acc) return <Typography.Text type="secondary">未绑定</Typography.Text>
+        const hasRun = !!activeRunOfInstance(runs, r.index)
+        // 基础实例只用于克隆，不该给它绑账号；已经绑了的允许解绑。
+        // ★ 登录向导正在跑时不预先禁用 —— 让主进程 login.assertEditable 的中文错误原样冒泡。
+        const reason = hasRun
+          ? '这个实例上还有任务在执行，改绑会让正在跑的脚本对不上账号。等它结束再改。'
+          : base?.index === r.index && !acc
+            ? '基础实例只用于克隆，不参与自动采集，不需要绑账号。'
+            : null
         return (
-          <SemanticTag tone={acc.enabled ? 'info' : 'neutral'}>
-            {acc.name}
-            {acc.enabled ? '' : '（停用）'}
-          </SemanticTag>
+          <InstanceAccountCell
+            instanceIndex={r.index}
+            account={acc ?? null}
+            disabledReason={reason}
+            onChanged={() => refreshConfigBadges()}
+          />
         )
       }
     },
@@ -603,7 +614,7 @@ export default function InstancesView(): React.JSX.Element {
             sampling={gather.samplingMap[r.index] === true}
             toggling={gather.autoBusy[r.index] === true}
             resuming={gather.resumingMap[r.index] === true}
-            configEnabled={configEnabled[r.index] === true}
+            configEnabled={configBadges[r.index]?.enabled === true}
             hasAccount={!!acc}
             isBase={base?.index === r.index}
             onToggleAuto={(i, v) => void handleToggleAuto(i, v)}
@@ -1197,6 +1208,13 @@ export default function InstancesView(): React.JSX.Element {
       >
         <PreviewPane instanceIndex={previewIndex} active={previewIndex !== null} />
       </Drawer>
+
+      {/* 采集配置：与「采集总览」页同一个抽屉、同一份表单 */}
+      <GatherConfigDrawer
+        index={configDrawerFor}
+        onClose={() => setConfigDrawerFor(null)}
+        onSaved={() => refreshConfigBadges()}
+      />
     </Space>
   )
 }

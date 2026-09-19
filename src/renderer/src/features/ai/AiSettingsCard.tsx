@@ -1,6 +1,10 @@
 /**
- * 设置页里的「AI 顾问」区块：OpenAI 兼容接口配置 + 视觉能力测试 + 最近问询记录。
+ * 「AI 处理」页里折叠起来的接口配置：OpenAI 兼容接口 + 限额 + 视觉能力测试。
  *
+ * ★ **总开关不在这里。** enabled 由页面顶部那个 Switch 直接保存（AiView），
+ *   本表单的字段里刻意没有它 —— 否则在折叠区点一次「保存」就会把顶部开关按旧值悄悄翻回去，
+ *   而且不会有任何报错。
+ * ★ 最近问询记录也不在这里：AiView 下半部分就是完整的记录表，同一份数据摆两遍只会让人怀疑哪份是真的。
  * ★ 凭据纪律：主进程给的 AiConfigView 类型上就没有 apiKey；输入框留空 = 不修改；
  *   要清掉得点「清除 Key」按钮。用户新填的 Key 随保存补丁送走后即丢弃。
  * ★ 默认值只有一个权威来源 defaultAiConfig()（@shared/ai）。这里出现的 min/max 是取值范围（AI_RANGE）。
@@ -19,30 +23,22 @@ import {
   Row,
   Select,
   Space,
-  Switch,
-  Tag,
-  Typography
+  Switch
 } from 'antd'
-import { ExperimentOutlined, RobotOutlined, SaveOutlined } from '@ant-design/icons'
+import { ExperimentOutlined, SaveOutlined } from '@ant-design/icons'
 import {
-  AI_ACTION_LABEL,
-  AI_OUTCOME_LABEL,
   AI_PRESETS,
   AI_RANGE,
-  AI_SCREEN_LABEL,
   defaultAiConfig,
   toAiConfigView,
   type AiConfigPatch,
-  type AiConfigView,
-  type AiConsultRecord
+  type AiConfigView
 } from '@shared/ai'
-import { formatCst } from '@shared/alerts'
 import GlassCard from '@/components/GlassCard'
 import { toast } from '@/ipc/useIpc'
-import { subscribeAi, useAiStore } from './aiStore'
+import { useAiStore } from './aiStore'
 
 interface AiFormValues {
-  enabled: boolean
   baseUrl: string
   /** 新填的 Key；留空 = 不修改。 */
   apiKey: string
@@ -58,7 +54,6 @@ interface AiFormValues {
 
 function toFormValues(view: AiConfigView): AiFormValues {
   return {
-    enabled: view.enabled,
     baseUrl: view.baseUrl,
     apiKey: '',
     model: view.model,
@@ -75,7 +70,6 @@ function toFormValues(view: AiConfigView): AiFormValues {
 function toPatch(v: AiFormValues): AiConfigPatch {
   const key = (v.apiKey ?? '').trim()
   return {
-    enabled: v.enabled,
     baseUrl: (v.baseUrl ?? '').trim(),
     model: (v.model ?? '').trim(),
     timeoutMs: v.timeoutMs,
@@ -89,17 +83,6 @@ function toPatch(v: AiFormValues): AiConfigPatch {
   }
 }
 
-const OUTCOME_COLOR: Record<AiConsultRecord['outcome'], string> = {
-  skipped: 'default',
-  failed: 'error',
-  unparsable: 'warning',
-  no_action: 'default',
-  rejected: 'warning',
-  applied: 'processing',
-  verified: 'success',
-  harvested: 'success'
-}
-
 export default function AiSettingsCard(): React.JSX.Element {
   const configView = useAiStore((s) => s.configView)
   const configFromMain = useAiStore((s) => s.configFromMain)
@@ -108,8 +91,6 @@ export default function AiSettingsCard(): React.JSX.Element {
   const saving = useAiStore((s) => s.saving)
   const testing = useAiStore((s) => s.testing)
   const testResult = useAiStore((s) => s.testResult)
-  const status = useAiStore((s) => s.status)
-  const history = useAiStore((s) => s.history)
   const load = useAiStore((s) => s.load)
   const saveConfig = useAiStore((s) => s.saveConfig)
   const test = useAiStore((s) => s.test)
@@ -118,9 +99,9 @@ export default function AiSettingsCard(): React.JSX.Element {
   const [form] = Form.useForm<AiFormValues>()
   const [dirty, setDirty] = useState(false)
 
+  // 订阅（ai:configChanged / ai:consulted）在 AiView 里做 —— 配置折叠起来时也要继续收推送。
   useEffect(() => {
     void load()
-    return subscribeAi()
   }, [load])
 
   useEffect(() => {
@@ -183,17 +164,10 @@ export default function AiSettingsCard(): React.JSX.Element {
     ? `已配置 ${configView.apiKeyMasked}（留空表示不修改）`
     : '例如 sk-…（在模型平台的「API Key 管理」里创建）'
 
-  const recent = history.slice(0, 6)
-
   return (
     <GlassCard
       padding="sm"
-      title={
-        <Space>
-          <RobotOutlined />
-          <span>AI 顾问（认不出界面时问视觉大模型）</span>
-        </Space>
-      }
+      title="接口配置"
       extra={
         <Space>
           <Button
@@ -290,17 +264,7 @@ export default function AiSettingsCard(): React.JSX.Element {
         onValuesChange={() => setDirty(true)}
       >
         <Row gutter={12}>
-          <Col span={8}>
-            <Form.Item
-              name="enabled"
-              label="启用 AI 顾问"
-              valuePropName="checked"
-              extra="关掉后认不出界面时照旧只走 BACK 兜底。"
-            >
-              <Switch />
-            </Form.Item>
-          </Col>
-          <Col span={16}>
+          <Col span={24}>
             <Form.Item
               label="快速填入平台预设"
               extra="只是把接口地址和一个示例模型名填进下面两个框，模型名以平台最新文档为准。"
@@ -455,47 +419,6 @@ export default function AiSettingsCard(): React.JSX.Element {
         </Row>
       </Form>
 
-      <Divider titlePlacement="start" style={{ margin: '4px 0 12px' }}>
-        最近问询
-      </Divider>
-      <Space direction="vertical" size={4} style={{ width: '100%' }}>
-        <span className="wl-micro">
-          {status
-            ? `最近一小时 ${status.callsLastHour} / ${status.maxCallsPerHour || '∞'} 次 · 累计问询 ${status.consultCount} 次 · 自学模板 ${status.harvestedCount} 张 · ${status.configured ? (status.enabled ? '已启用' : '已配置但未启用') : '尚未配置完整'}`
-            : '还没拿到状态。'}
-        </span>
-        {recent.length === 0 ? (
-          <Typography.Text type="secondary">还没有问询记录。</Typography.Text>
-        ) : (
-          recent.map((r) => (
-            <div key={r.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-              <Tag color={OUTCOME_COLOR[r.outcome]} style={{ marginTop: 2 }}>
-                {AI_OUTCOME_LABEL[r.outcome]}
-              </Tag>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <span className="wl-micro">
-                  {formatCst(r.at)} · {r.instanceIndex === null ? '—' : `实例 ${r.instanceIndex}`} ·{' '}
-                  {r.context}
-                  {r.advice
-                    ? ` · ${AI_SCREEN_LABEL[r.advice.screen]} / ${AI_ACTION_LABEL[r.advice.action]} / 置信 ${r.advice.confidence.toFixed(2)}`
-                    : ''}
-                  {r.harvestedTemplateId ? ` · 新模板 ${r.harvestedTemplateId}` : ''}
-                </span>
-                <Typography.Paragraph
-                  type="secondary"
-                  style={{
-                    marginBottom: 0,
-                    fontSize: 'var(--wl-fs-label)',
-                    whiteSpace: 'pre-wrap'
-                  }}
-                >
-                  {r.message}
-                </Typography.Paragraph>
-              </div>
-            </div>
-          ))
-        )}
-      </Space>
     </GlassCard>
   )
 }

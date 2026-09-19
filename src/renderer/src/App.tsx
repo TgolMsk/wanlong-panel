@@ -5,7 +5,7 @@
  *   instance:changed / run:changed / log:line / app:toast / app:settingsChanged / app:health
  * 高频数据（实时日志、预览帧）不走这里，走 MessagePort（见 ipc/useWorkerPort.ts）。
  *
- * 外观：五个主入口 + 组内页面切换，侧栏和顶栏使用半透明底色。
+ * 外观：七个主入口 + 组内页面切换，侧栏和顶栏使用半透明底色。
  * 布局在 shell.css，颜色沿用 tokens.css 的 var(--wl-*)。
  */
 
@@ -17,6 +17,7 @@ import { bindToaster, useIpcEvent } from './ipc/useIpc'
 import { postToAllWorkers } from './ipc/useWorkerPort'
 import { pushLog } from './store/logStore'
 import HealthBadge from './components/HealthBadge'
+import { SidebarUpdate } from './features/update'
 import { SemanticTag } from './components/StatusTag'
 import ThemeToggle from './components/ThemeToggle'
 import InstancesView from './views/InstancesView'
@@ -27,7 +28,6 @@ import PlansView from './views/PlansView'
 import AccountsView from './views/AccountsView'
 import SettingsView from './views/SettingsView'
 import GatherOverviewView from './features/gather/GatherOverviewView'
-import GatherConfigView from './features/gather/GatherConfigView'
 import StatsView from './features/stats/StatsView'
 import { AiView } from './features/ai'
 import { NAVIGATION, sectionForView } from './navigation'
@@ -42,8 +42,6 @@ function CurrentView({ view }: { view: ViewKey }): React.JSX.Element {
       return <RunsView />
     case 'gatherOverview':
       return <GatherOverviewView />
-    case 'gatherConfig':
-      return <GatherConfigView />
     case 'stats':
       return <StatsView />
     case 'ai':
@@ -152,7 +150,7 @@ export default function App(): React.JSX.Element {
           }}
         />
         <div className="wl-sidebar-bottom">
-          {!collapsed && <span className="wl-sidebar-note">万龙 · 控制面板</span>}
+          <SidebarUpdate collapsed={collapsed} />
           <Tooltip title={collapsed ? '展开导航' : '收起导航'}>
             <Button
               type="text"

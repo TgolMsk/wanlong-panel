@@ -7,11 +7,10 @@
  * 真正会去动模拟器的只有两处：卡片上的「立即采样」按钮，以及调度器自己的到点唤醒与周期校准。
  */
 
-import React, { useEffect, useMemo } from 'react'
-import { Alert, Button } from 'antd'
-import { ReloadOutlined } from '@ant-design/icons'
+import React, { useEffect, useMemo, useState } from 'react'
+import { Alert, Badge, Button, Tooltip } from 'antd'
+import { ReloadOutlined, SlidersOutlined } from '@ant-design/icons'
 import { formatDuration } from '@shared/scheduler'
-import { alertSpec } from '@shared/alerts'
 import { useAppStore, isRunActive } from '@/store/appStore'
 import { pauseOf, pausedIndexes, subscribeAlerts, useAlertStore } from '@/features/alerts'
 import { toast } from '@/ipc/useIpc'
@@ -22,6 +21,8 @@ import { formatAgo, formatClock, formatShort, summarizeQueues } from './present'
 import { InstanceMarchCard } from './InstanceMarchCard'
 import { emptyQueueState, subscribeScheduler, useMarchStore } from './marchStore'
 import { useCountdownTick } from './useCountdownTick'
+import GatherConfigDrawer from './GatherConfigDrawer'
+import { useGatherConfigBadges } from './useGatherConfigBadges'
 import './gather.css'
 
 export default function GatherOverviewView(): React.JSX.Element {
@@ -46,6 +47,10 @@ export default function GatherOverviewView(): React.JSX.Element {
   const resume = useAlertStore((s) => s.resume)
 
   const now = useCountdownTick()
+  const selectedInstance = useAppStore((s) => s.selectedInstance)
+  // 采集配置的健康度角标 + 抽屉开合。纯界面状态，不进 appStore。
+  const { badges, problemCount, refresh: refreshBadges } = useGatherConfigBadges()
+  const [configFor, setConfigFor] = useState<number | null>(null)
 
   useEffect(() => {
     void load()
@@ -113,6 +118,28 @@ export default function GatherOverviewView(): React.JSX.Element {
           <span className="wl-label">查看各账号的队伍进度、空闲队列与下一次采集时间。</span>
         </div>
         <div className="wlg-actions-btns">
+          <Tooltip
+            title={
+              instances.length === 0
+                ? '还没有实例，先到「设备与账号」添加或刷新实例。'
+                : '打开的是其中一个实例的采集配置 —— 配置按实例（按账号）存，没有全局配置。' +
+                  `角标数字 = 有几个实例未绑账号、总开关没开或有校验错误（现在 ${problemCount} 个），具体是哪个看下面卡片上的角标。`
+            }
+          >
+            <Badge
+              count={problemCount}
+              size="small"
+              style={{ backgroundColor: 'var(--wl-warning)' }}
+            >
+              <Button
+                icon={<SlidersOutlined />}
+                disabled={instances.length === 0}
+                onClick={() => setConfigFor(selectedInstance ?? instances[0]?.index ?? null)}
+              >
+                采集配置
+              </Button>
+            </Badge>
+          </Tooltip>
           <Button icon={<ReloadOutlined />} onClick={() => void load()}>
             刷新状态
           </Button>
@@ -131,15 +158,9 @@ export default function GatherOverviewView(): React.JSX.Element {
           message={`${pausedList.length} 个实例已被暂停，需要人工介入`}
           description={
             <span>
-              {pausedList
-                .map((i) => {
-                  const p = pauseOf(pauses, i)
-                  const title = p.type ? alertSpec(p.type).title : '已暂停'
-                  return `#${i}（${title}）`
-                })
-                .join('、')}
-              ：自动调度已经关掉，不会再操作这些实例的游戏。
-              处理完现场后到下面对应的红色卡片上点「恢复」。
+              已暂停：{pausedList.map((i) => `#${i}`).join('、')}
+              。自动调度已关掉，不会再操作这些实例的游戏；原因与现场截图点下面红框卡片右上角的角标查看，
+              处理完在卡片底部点「恢复」。
             </span>
           }
         />
@@ -233,10 +254,21 @@ export default function GatherOverviewView(): React.JSX.Element {
               onResume={(idx) => void handleResume(idx)}
               onSample={(idx) => void handleSample(idx)}
               onToggleAuto={(idx, v) => void handleToggleAuto(idx, v)}
+              badge={badges[inst.index] ?? null}
+              onOpenConfig={(idx) => setConfigFor(idx)}
             />
           ))}
         </div>
       )}
+
+      <GatherConfigDrawer
+        index={configFor}
+        onClose={() => setConfigFor(null)}
+        onSaved={() => {
+          refreshBadges()
+          void load()
+        }}
+      />
     </div>
   )
 }

@@ -27,11 +27,9 @@ export type ViewKey =
   | 'runs'
   /** 群控倒计时总览（features/gather）。 */
   | 'gatherOverview'
-  /** 自动采集配置（features/gather）。 */
-  | 'gatherConfig'
   /** 每日数据统计（features/stats，按北京日期分桶）。 */
   | 'stats'
-  /** AI 顾问：接口配置 + 处理记录（features/ai）。 */
+  /** AI 顾问：左侧一级入口「AI 处理」，顶部总开关 + 折叠的接口配置（features/ai）。 */
   | 'ai'
   | 'templates'
   | 'scripts'
@@ -47,7 +45,6 @@ const VIEW_KEYS: readonly ViewKey[] = [
   'instances',
   'runs',
   'gatherOverview',
-  'gatherConfig',
   'stats',
   'ai',
   'templates',
@@ -58,6 +55,16 @@ const VIEW_KEYS: readonly ViewKey[] = [
 ]
 
 /**
+ * 下线掉的旧页面 -> 现在的落点。
+ * 删导航入口时必须在这里留一条：老用户 localStorage 里还记着旧 key，
+ * 不映射的话会被当成未知值扔掉、莫名回到实例页（还以为面板把设置弄丢了）。
+ */
+const RETIRED_VIEWS: Record<string, ViewKey> = {
+  // 采集配置不再是独立页面，改成总览页/实例列表里就地展开的抽屉。
+  gatherConfig: 'gatherOverview'
+}
+
+/**
  * 读上次停留的页面。
  * localStorage 在隐私窗口 / 被禁站点数据时读写都会抛，所以整段包 try/catch，
  * 读不到就回到实例管理页 —— 记住页面只是便利功能，绝不能因此白屏。
@@ -66,6 +73,11 @@ function readStoredView(): ViewKey {
   try {
     const raw = window.localStorage.getItem(VIEW_STORAGE_KEY)
     if (raw && (VIEW_KEYS as readonly string[]).includes(raw)) return raw as ViewKey
+    const moved = raw ? RETIRED_VIEWS[raw] : undefined
+    if (moved) {
+      storeView(moved)
+      return moved
+    }
   } catch {
     // 忽略：下面回默认值
   }

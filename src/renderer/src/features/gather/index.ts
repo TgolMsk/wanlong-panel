@@ -3,13 +3,15 @@
  *
  * 给接线的人（负责 App.tsx / 左侧导航的那位）：
  *   import GatherOverviewView from '@/features/gather/GatherOverviewView'
- *   import GatherConfigView from '@/features/gather/GatherConfigView'
- * 两个都是默认导出的整页组件，直接当成 ViewKey 的一个分支渲染即可，
+ * 它是默认导出的整页组件，直接当成 ViewKey 的一个分支渲染即可，
  * 不需要传任何 props（数据从 appStore 与本模块自己的 marchStore 里取）。
  *
  * 接线要做的事只有两件（都在 App.tsx 里，不在本模块）：
- *   1. ViewKey 联合类型加 'gatherOverview' | 'gatherConfig'
- *   2. MENU_ITEMS 加两条菜单，switch 里加两个 case
+ *   1. ViewKey 只加 'gatherOverview'（采集配置不再是页面，是总览页 / 实例列表里就地展开的抽屉）
+ *   2. 导航加一条菜单，switch 里加一个 case
+ *
+ * GatherConfigView 现在通常由 GatherConfigDrawer 包着用（传 index / embedded）；
+ * 不传 props 的整页用法仍然支持，只是导航里已经没有入口了。
  *
  * 数据来源：`@shared/scheduler` 的调度器通道（scheduler:state / :sample / :setAuto /
  * :config / :saveConfig 与 scheduler:changed 推送）。主进程还没注册这些通道时，
@@ -18,8 +20,28 @@
 
 export { default as GatherOverviewView } from './GatherOverviewView'
 export { default as GatherConfigView } from './GatherConfigView'
+export type { GatherConfigViewProps } from './GatherConfigView'
+export { default as GatherConfigDrawer } from './GatherConfigDrawer'
+export type { GatherConfigDrawerProps } from './GatherConfigDrawer'
+export {
+  useGatherConfigBadges,
+  describeGatherConfigBadge,
+  type GatherConfigBadge,
+  type GatherConfigBadges
+} from './useGatherConfigBadges'
 
 export { InstanceMarchCard, QueueBadge } from './InstanceMarchCard'
+export {
+  InstanceDiagnosticsBadge,
+  type InstanceDiagnosticsBadgeProps
+} from './InstanceDiagnosticsBadge'
+export {
+  collectDiagnostics,
+  worstLevel,
+  attentionCount,
+  type DiagnosticItem,
+  type DiagnosticLevel
+} from './diagnostics'
 export { InstanceGatherControls } from './InstanceGatherControls'
 export { useInstanceGather, describeBatchOutcome } from './useInstanceGather'
 export type { InstanceGatherApi, BatchOutcome } from './useInstanceGather'
@@ -74,6 +96,8 @@ export {
 export {
   loadGatherConfig,
   saveGatherConfig,
+  hasLocalGatherConfig,
+  migrateLocalConfigToAccount,
   exportGatherConfig,
   importGatherConfig,
   GATHER_PARAM_SCOPE,

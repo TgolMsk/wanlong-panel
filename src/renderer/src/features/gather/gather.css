@@ -573,3 +573,40 @@
   outline: 2px solid var(--wl-accent);
   outline-offset: 1px;
 }
+
+/* ── 诊断角标（InstanceDiagnosticsBadge）───────────────────────────────── */
+/* 表格行只有 250px 宽：按钮必须压窄，否则第二行会换行、把整张表的行高撑起来。 */
+.wlg-diag-btn {
+  padding-inline: var(--wl-space-1);
+  min-width: 0;
+}
+.wlg-diag-btn:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: 1px;
+}
+/* 角标抽屉里的分区：一条诊断一段，段间留白比行间大，长错误才读得下去。 */
+.wlg-diag-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-4);
+}
+.wlg-diag-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wl-space-1);
+  white-space: pre-wrap;
+}
+.wlg-diag-level-error {
+  color: var(--wl-danger);
+}
+.wlg-diag-level-warning {
+  color: var(--wl-warning);
+}
+.wlg-diag-level-info {
+  color: var(--wl-text-tertiary);
+}
+
+/* 抽屉里的配置面板：大标题由抽屉标题代替，吸底条要贴到抽屉 body 底边。 */
+.wlg-cfg-embedded {
+  padding-bottom: 0;
+}

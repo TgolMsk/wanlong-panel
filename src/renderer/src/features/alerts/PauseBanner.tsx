@@ -32,6 +32,12 @@ export interface PauseBannerProps {
   standalone?: boolean
   /** 正在恢复（按钮转圈 + 防连点）。 */
   resuming?: boolean
+  /**
+   * 是否显示「恢复」按钮，默认显示。
+   * 只有诊断角标的抽屉会传 false —— 那里外面（卡脚 / 表格行）已经有一个「恢复」，
+   * 同一个动作出现两遍会让人不确定点哪个才算数。
+   */
+  showResume?: boolean
   onResume: (instanceIndex: number) => void
 }
 
@@ -40,6 +46,7 @@ export function PauseBanner({
   instanceName,
   standalone,
   resuming,
+  showResume = true,
   onResume
 }: PauseBannerProps): React.JSX.Element | null {
   const [shotUrl, setShotUrl] = useState<string | null>(null)
@@ -126,6 +133,7 @@ export function PauseBanner({
       )}
 
       <div className="wla-banner-actions">
+        {showResume && (
         <Popconfirm
           title="确认已经处理好现场了吗？"
           description={
@@ -147,6 +155,7 @@ export function PauseBanner({
             恢复
           </Button>
         </Popconfirm>
+        )}
 
         {pause.shotPath ? (
           <Tooltip title={`留痕文件：${pause.shotPath}`}>

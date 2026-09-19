@@ -3,9 +3,12 @@
  *
  * 与「采集总览」页的卡片脚是同一套语义（同一个 scheduler:setAuto / scheduler:sample），
  * 只是压成两行塞进表格。差异只有两处：
- *   · 被异常暂停时这里只给「已暂停 · 类型」和「恢复」按钮，原因 / 处置建议 / 现场截图仍去总览页看；
+ *   · 报错 / 暂停原因 / 行内原因都收进诊断角标（InstanceDiagnosticsBadge），点开才展开 ——
+ *     表格行只有 250px 宽，长错误塞进原生 title 会被系统截断、还不能复制；
+ *     这里**要**传 rowReasons，因为表格里没有 MarchRow，行内原因没有别的地方能显示。
  *   · 多两个提醒标签：「配置未启用」（采集配置总开关是关的）与「未绑定账号」——
  *     这两种情况下开了自动调度也只会定时读面板、不会派兵，卡片上没有这层提示，用户常常在这儿踩坑。
+ *     点「配置未启用」是**就地展开采集配置抽屉**，不跳页。
  */
 
 import React from 'react'
@@ -13,9 +16,10 @@ import { Button, Popconfirm, Switch, Tooltip } from 'antd'
 import { PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons'
 import type { MumuInstance } from '@shared/domain'
 import type { InstanceQueueState } from '@shared/scheduler'
-import { alertSpec, formatCst, type InstancePauseState } from '@shared/alerts'
+import { alertSpec, type InstancePauseState } from '@shared/alerts'
 import { SemanticTag, type SemanticTone } from '@/components/StatusTag'
 import { QueueBadge } from './InstanceMarchCard'
+import { InstanceDiagnosticsBadge } from './InstanceDiagnosticsBadge'
 import { formatAgo, formatClock } from './present'
 import './gather.css'
 
@@ -40,7 +44,7 @@ export interface InstanceGatherControlsProps {
   onToggleAuto: (instanceIndex: number, enabled: boolean) => void
   onSample: (instanceIndex: number) => void
   onResume: (instanceIndex: number) => void
-  /** 跳到这个实例的「采集配置」页。 */
+  /** 就地展开这个实例的采集配置抽屉（不跳页）。 */
   onOpenConfig: (instanceIndex: number) => void
   /** 跳到「账号管理」页。 */
   onOpenAccounts: () => void
@@ -65,10 +69,7 @@ function describeStatus(
     return {
       text: `已暂停 · ${title}`,
       tone: 'danger',
-      tip:
-        `${pause.reason ?? '没有记录原因。'}` +
-        `（暂停于 ${pause.pausedAt == null ? '--' : formatCst(pause.pausedAt)} 北京时间）` +
-        '原因详情、处置建议与现场截图在「采集总览」页的红条里。'
+      tip: '点旁边的角标查看暂停原因、处置建议与现场截图。'
     }
   }
   if (sampling || state.sampling) {
@@ -86,7 +87,7 @@ function describeStatus(
     return {
       text: `上次采样失败（${formatAgo(now - state.lastSampledAt)}）`,
       tone: 'danger',
-      tip: state.error
+      tip: '点旁边的角标查看完整错误原因。'
     }
   }
   if (state.auto && state.nextWakeAt != null) {
@@ -187,6 +188,17 @@ export function InstanceGatherControls({
           </Tooltip>
         )}
 
+        <InstanceDiagnosticsBadge
+          instance={instance}
+          state={state}
+          pause={pause}
+          resuming={resuming}
+          onResume={onResume}
+          rowReasons
+          imminentMs={60_000}
+          staleAfterMs={60_000}
+        />
+
         {paused && (
           <Popconfirm
             title="确认已经处理好现场了吗？"
@@ -208,7 +220,7 @@ export function InstanceGatherControls({
         )}
 
         {!paused && !hasAccount && (
-          <Tooltip title="主进程只从绑定账号里读采集配置：没绑账号的实例开了自动采集也只会定时读面板，不会派兵。点击去「账号管理」页绑定一个账号。">
+          <Tooltip title="主进程只从绑定账号里读采集配置：没绑账号的实例开了自动采集也只会定时读面板，不会派兵。请在本行左边的「绑定账号」列直接选一个账号（也可以新建）；点这里去「账号管理」页做更完整的设置。">
             <button type="button" className="wlg-tag-btn" onClick={onOpenAccounts}>
               <SemanticTag tone="warning">未绑定账号</SemanticTag>
             </button>
@@ -216,7 +228,7 @@ export function InstanceGatherControls({
         )}
 
         {!paused && hasAccount && !configEnabled && (
-          <Tooltip title="这个实例的采集配置里「启用自动采集」是关的：开了自动采集也只会定时读面板，不会派兵。点击去「采集配置」页打开并保存。">
+          <Tooltip title="这个实例的采集配置里「启用自动采集」是关的：开了自动采集也只会定时读面板，不会派兵。点击就地展开采集配置，打开总开关并保存。">
             <button type="button" className="wlg-tag-btn" onClick={() => onOpenConfig(index)}>
               <SemanticTag tone="warning">配置未启用</SemanticTag>
             </button>
