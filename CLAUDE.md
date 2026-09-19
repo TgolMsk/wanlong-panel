@@ -83,13 +83,14 @@ npm run dist:mac     # electron-builder --mac --arm64
 
 npm run smoke        # 端到端冒烟（真机，只按 HOME/APP_SWITCH + 点一次空白处）
 npm run check        # 全部离线自检（不碰模拟器、不发真实网络请求，801 项断言，约 1 分钟）
-                     #   = check:ld(41) + check:mumu(65) + check:launch(22) + check:freeze(65) + check:level(64) + check:ai(76)
+                     #   = check:ld(41) + check:mumu(65) + check:launch(22) + check:freeze(65) + check:level(64) + check:card(15) + check:ai(76)
                      #   + check:sched(24) + check:gather(28，60 张真机截图回放)
                      #   + check:alerts(174) + check:bot(76) + check:stats(73) + check:resources(93)
                      #   ★ check:sched / check:gather 需要 gitignore 掉的 .tplkit/frames 真机截图，本机没有会报「找不到帧目录」
 npm run check:mumu   # MuMu 驱动纯函数（Windows）：info JSON 解析 / 状态映射 / errcode 判定 / setting 参数 / 安装目录探测
 npm run check:launch # ★ 冷启动恢复：游戏已在前台就绝不乱拉 / 没跑就 monkey 拉起并等前台 / 失败不抛（虚拟时钟）
 npm run check:freeze # ★ 卡死看门狗 + 自动重启：帧指纹 / 阈值与熔断（虚拟时钟）/ 恢复流程每一步的成败 / 与真·调度器的接线不死锁
+npm run check:card   # ★ G8 等卡片「停稳」：见过卡片绝不退化成 null / 帧数有硬上限 / waitMs<=0 退化成单帧（假 session，不要真机帧）
 npm run check:level  # ★ 搜索等级记忆 + 下限状态机：滑杆上限按资源缓存 / 搜不出卡片立刻放宽 / 「F 级搜不到」跨轮记忆与作废 / 落盘往返（不需要真机截图）
 npm run check:ld     # 雷电驱动纯函数：list2 解析 / 状态映射 / GBK 解码 / 成败判定 / modify 参数
 npm run check:ai     # AI 顾问：配置三态 / 请求形状 / 失败分类 / ★ Key 泄露实测 / 限频 / ★ 端到端自学模板闭环（假 fetch + 假 IO + 合成帧）
@@ -268,6 +269,15 @@ adb 会报 `-s requires an argument`。Node 的 `spawn` 用数组传参不受影
    → 每 5 分钟退避重试、游戏停在搜索页。**补一个新数字就要把 0~9 补齐**，别等它涨到 11 再来一次。
 4. **「采集」按钮是编成模式下拉框，不是一键编成。** 弹出的菜单是模态的，会把下一次点击整个吃掉。
    G14 必须「点完复验、按钮还在就再点一次」，且复验是硬前置（确认按钮消失才算成功，绝不会派出两支队）。
+   ★ **点之前也要复验。** 2026-09-19 补：G8 的卡片锚点可能锁在滑入动画的中间帧上
+   （`CARD.anchorRoi` 1320×320 比模板自述的 520×190 大四倍，按钮滑到一半也能过 0.85），
+   而 G10 原来按那个几帧前的坐标盲点 → 点空 → 只能等 6 秒超时，还白吃一格 `occupiedRetryLimit`。
+   现在 `waitForCard` 命中后要复验「隔 300ms 还在原地」（最多 2 次，有硬上限，见 `check:card`），
+   `dispatchTroop` 点「采集」前再 `refindGather` 重新匹配一次 —— 与 G7 的 `findSearchAnchor`、
+   G14 的 `refindMarch` 同一套做法，也与契约 `gather-flow.json` 的 G10「tapTemplate」一致。
+   ★★ `waitForCard` 返回 null 的含义是**「附近没有这个等级的点」**，不是「这一帧没匹配上」——
+   见过卡片之后绝不许退化成 null，否则会放宽下限、把假结论写进 12 小时的 `noResultFloor` 记忆，
+   下限到底时还会 `giveUp` 停采 10 分钟。
 5. **世界地图判据不能只用放大镜。** 它的镜片半透明，分数随地形漂移（0.981 → 0.794）。
    用 `navigation.ts` 的 `WORLD_MAP_TEMPLATES`（城堡 A/B + 放大镜）；城内判据用 `CITY_TEMPLATES`（地图钮 A/B）。
    ★ 阵营变体：法师=主号（A）、兽族=huadong（B）、精灵暂不适配。接新阵营号先补两态导航按钮的变体模板。

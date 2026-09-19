@@ -84,9 +84,11 @@ import {
 
 /**
  * 一次顺利的派兵实测要 17 帧（离线回放真机截图量得；设计文档估的 9~12 偏乐观）。
- * 剩余配额少于这个数就不再开新的派兵，留 18 的余量。
+ * 2026-09-19 加了两道复验：waitForCard 的停稳复验（顺利时 +1、最坏 +2，有硬上限
+ * CARD_SETTLE_ATTEMPTS）与 G10 点采集前的重新定位（+1）。所以顺利 19、最坏 20。
+ * 剩余配额少于这个数就不再开新的派兵。
  */
-const CAPTURES_PER_DISPATCH = 18
+const CAPTURES_PER_DISPATCH = 20
 
 export interface RunGatherCycleOptions {
   io: GatherIo

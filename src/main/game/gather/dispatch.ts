@@ -14,11 +14,14 @@ import type { MatchResult, Point } from '@shared/vision'
 import { parseGrouped, parseGroupedRatio } from '../vision/digits'
 import type { GatherConfig, ResourceEntry } from './config'
 import { effectiveMaxTravelSeconds } from './config'
-import { CREATE_TROOP, VALUE_RIGHT_OF_LABEL } from './geometry'
+import { CARD, CREATE_TROOP, VALUE_RIGHT_OF_LABEL } from './geometry'
 import { closeResourceCard, leaveCreateTroopPage } from './navigation'
 import { parseHmsFlexible } from './parse'
 import type { GatherSession } from './session'
 import { GLYPH, TPL } from './templates'
+
+/** 锚点漂移超过这么多像素就记一句日志。小于它是匹配噪声，不值得刷屏。 */
+const CARD_ANCHOR_DRIFT_LOG_PX = 8
 
 export type DispatchResult =
   | {
@@ -37,7 +40,8 @@ export type DispatchResult =
 /**
  * 从「资源点卡片」一路点到「行军」。
  *
- * @param cardAnchor 采集按钮命中中心（卡片锚点）
+ * @param cardAnchor G8 读卡片时的采集按钮命中中心。**只用来比对漂移**，
+ *                   真正点的位置每次点前重新匹配（见 refindGather）。
  * @param cardStorage 卡片上的储量，preferLoadCoversStorage 校验用
  */
 export async function dispatchTroop(
@@ -48,18 +52,50 @@ export async function dispatchTroop(
   cardStorage: number | null
 ): Promise<DispatchResult> {
   // ── G10：点采集 ────────────────────────────────────────────────────────
-  await s.tapAt(cardAnchor, 800)
-  const createBtn = await s.waitFor(TPL.btnCreateTroop, { waitMs: 6000, pollMs: 700 })
-  if (!createBtn) {
-    await s.shot('g10-no-create-troop')
-    // 常见原因：弹了「队列已满」「体力不足」这类提示（对应的模板还没裁，暂时只能靠超时兜底）。
+  // ★ 点之前重新定位一次，不用 cardAnchor 盲点。
+  //   cardAnchor 是 G8 那一刻的命中中心，中间还隔着 readCard 与 G9 的对账（可能点过勾选框），
+  //   卡片若当时还在滑入、或已经被关掉，那个坐标就是错的 —— 点空之后只能靠 6 秒超时兜底，
+  //   还会白吃一格 occupiedRetryLimit。搜索按钮（findSearchAnchor）与行军按钮（refindMarch）
+  //   本来就是点前重新匹配的，这里补齐，也与契约 gather-flow.json 的 G10「tapTemplate」一致。
+  const gatherBtn = await refindGather(s)
+  if (gatherBtn) {
+    // 顺手把「锚点漂了多少」记下来：这正是「卡片还在动就把坐标锁死」那个竞态的直接证据，
+    // 真机日志里能看到它到底有没有发生、漂了多少像素。不漂就一个字都不打。
+    const drift = Math.max(
+      Math.abs(gatherBtn.centerX - cardAnchor.x),
+      Math.abs(gatherBtn.centerY - cardAnchor.y)
+    )
+    if (drift > CARD_ANCHOR_DRIFT_LOG_PX) {
+      s.log(
+        'warn',
+        `「采集」按钮比读卡片时挪了 ${Math.round(drift)}px（卡片当时多半还在滑入），已按新位置点。`
+      )
+    }
+  }
+  if (!gatherBtn) {
+    await s.shot('g10-gather-lost')
     await closeResourceCard(s)
     return {
       ok: false,
       kind: 'retrySearch',
       reason:
-        '点「采集」之后没出现「创建部队」按钮。可能弹了「队列已满 / 体力不足 / 无可用部队」之类的提示' +
-        '（这几个提示的模板尚未采集，无法分辨具体原因，已留痕）。'
+        '准备点「采集」时按钮已经不在原位：卡片可能还在动、或者被别的弹窗盖住 / 自己关掉了。' +
+        '这一下没有点出去（以前会盲点一次再等 6 秒超时），换个点重搜。'
+    }
+  }
+  await s.tapAt({ x: gatherBtn.centerX, y: gatherBtn.centerY }, 800)
+  const createBtn = await s.waitFor(TPL.btnCreateTroop, { waitMs: 6000, pollMs: 700 })
+  if (!createBtn) {
+    await s.shot('g10-no-create-troop')
+    // 按钮确实点到了（点之前刚匹配过），所以这里是**点下去之后**游戏没给创建部队页：
+    // 常见原因是弹了「队列已满」「体力不足」这类提示（对应的模板还没裁，只能靠超时兜底）。
+    await closeResourceCard(s)
+    return {
+      ok: false,
+      kind: 'retrySearch',
+      reason:
+        '「采集」点下去了，但 6 秒内没出现「创建部队」按钮。多半是弹了「队列已满 / 体力不足 / ' +
+        '无可用部队」之类的提示（这几个提示的模板尚未采集，无法分辨具体是哪一个，已留痕）。'
     }
   }
 
@@ -218,6 +254,17 @@ async function tapGatherPreset(s: GatherSession): Promise<void> {
     return
   }
   await s.tapAt({ x: preset.centerX, y: preset.centerY }, 800)
+}
+
+/**
+ * 重新定位「采集」按钮。
+ * ★ 必须显式 invalidate：G9 若没点勾选框，当前帧还是 G8 命中的那一张（frame() 默认复用），
+ *   不换帧就等于拿旧帧再匹配一遍，白做。
+ */
+async function refindGather(s: GatherSession): Promise<MatchResult | null> {
+  s.invalidate()
+  const m = await s.match(TPL.btnGather, CARD.anchorRoi)
+  return m.found ? m : null
 }
 
 /** 重新定位行军按钮（前面的点击会让帧作废）。 */

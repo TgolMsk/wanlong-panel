@@ -63,15 +63,71 @@ export interface CardReading {
   autoChecked: boolean | null
 }
 
-/** 等卡片出现（点完搜索之后）。超时返回 null —— 多半是没搜到点。 */
+/**
+ * 卡片「停稳」的判据：两帧里采集按钮的命中中心相差不超过这么多像素。
+ *
+ * ★ 为什么需要它：卡片是滑入动画，而搜索窗口 CARD.anchorRoi（1320x320）比按钮模板自己
+ *   标的 ROI（520x190）大四倍 —— 按钮滑到一半、离静止位还很远时照样能过 0.85 的阈值。
+ *   命中即用的话，锚点就锁在动画中间帧上：readCard 的 ROI 由它偏移，
+ *   G10 又按它去点「采集」，于是点空、读数歪、勾选框读不出连锁中止整轮。
+ * ★ 别调到 2~3px：真机噪声会让它反复判「还在动」，白烧截图配额。
+ */
+const CARD_SETTLE_TOLERANCE_PX = 6
+
+/**
+ * 最多复验几次。★ 必须有这个上限：没有它的话循环只由 deadline 收敛，
+ * 而「命中」这条路在 waitFor 里是不 sleep 的，帧数 = 预算 ÷ 截图延迟（8s ÷ 300~750ms = 11~26 帧），
+ * 一次 G8 就能吃掉 safety.maxCapturesPerCycle（默认 60）的三到四成，
+ * 后面撞上截图熔断时连收尾（关面板/关卡片）都做不了，游戏就停在搜索页上等 10 分钟。
+ */
+const CARD_SETTLE_ATTEMPTS = 2
+
+/** 两次复验之间静置多久。停稳判据要的是「隔一小会儿还在原地」，不是「连拍两张」。 */
+const CARD_SETTLE_PAUSE_MS = 300
+
+/**
+ * 等卡片出现并停稳（点完搜索之后）。
+ *
+ * 返回的是**最后一次**匹配到的中心：卡片上所有 ROI 都由它偏移，必须尽量是静止位的坐标。
+ * 三条出口，语义严格区分：
+ *   · 一次都没看见卡片 → null（调用方据此判定「附近没有这个等级的点」）
+ *   · 看见了、也确认停稳 → 停稳位
+ *   · 看见了、但没能确认停稳（复验次数用完，或复验帧没再匹配上）→ 最后看到的位置 + 一条 warn
+ * ★ 第三条**绝不能**退化成 null：那会被 flow 当成「附近没点」，进而放宽下限、
+ *   把假结论写进 12 小时的 noResultFloor 记忆，下限已到底时还会 giveUp 停采 10 分钟。
+ *   「看见过」与「没有」是两件事。
+ *
+ * @param waitMs 等卡片出现的预算；<= 0 时退化成单帧命中（离线回放用，静态帧没有动画可等）。
+ *               停稳复验另算，最多再花 CARD_SETTLE_ATTEMPTS × (300ms + 一帧)。
+ */
 export async function waitForCard(s: GatherSession, waitMs = 8000): Promise<Point | null> {
-  const hit = await s.waitFor(TPL.btnGather, {
+  const first = await s.waitFor(TPL.btnGather, {
     roi: CARD.anchorRoi,
-    waitMs,
+    waitMs: Math.max(0, waitMs),
     pollMs: 700
   })
-  if (!hit) return null
-  return { x: hit.match.centerX, y: hit.match.centerY }
+  if (!first) return null
+
+  let prev: Point = { x: first.match.centerX, y: first.match.centerY }
+  if (waitMs <= 0) return prev
+
+  for (let i = 0; i < CARD_SETTLE_ATTEMPTS; i++) {
+    await s.sleep(CARD_SETTLE_PAUSE_MS)
+    s.invalidate()
+    const m = await s.match(TPL.btnGather, CARD.anchorRoi)
+    if (!m.found) {
+      s.log('warn', '复验时没再匹配到「采集」按钮（可能被弹窗盖了一下），按上一帧的位置继续。')
+      return prev
+    }
+    const here: Point = { x: m.centerX, y: m.centerY }
+    const settled =
+      Math.abs(here.x - prev.x) <= CARD_SETTLE_TOLERANCE_PX &&
+      Math.abs(here.y - prev.y) <= CARD_SETTLE_TOLERANCE_PX
+    if (settled) return here
+    prev = here
+  }
+  s.log('warn', `资源点卡片复验 ${CARD_SETTLE_ATTEMPTS} 次仍在移动，按最后一帧的位置继续（可能点偏）。`)
+  return prev
 }
 
 /**
